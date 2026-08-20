@@ -4,9 +4,11 @@
   import Library from './routes/Library.svelte';
   import Workspace from './routes/Workspace.svelte';
   import Notices from '$lib/components/Notices.svelte';
+  import RecoveryPrompt from '$lib/revisions/RecoveryPrompt.svelte';
 
   import { appearance } from '$lib/design/theme.svelte';
   import { viewport } from '$lib/design/viewport.svelte';
+  import { activePage } from '$lib/stores/page.svelte';
   import { router } from '$lib/stores/router.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
   import { invoke, isDesktop } from '$lib/services/ipc';
@@ -62,6 +64,15 @@
   {:else}
     <Library />
   {/if}
+{/if}
+
+{#if ready}
+  <RecoveryPrompt
+    onrecovered={(pageId) => {
+      // If the recovered Page is the one on screen, show the recovered text.
+      if (activePage.page?.id === pageId) void activePage.load(pageId);
+    }}
+  />
 {/if}
 
 <Notices />

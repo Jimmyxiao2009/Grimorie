@@ -18,12 +18,24 @@
  */
 
 import { savePage } from '$lib/services/manuscript';
+import { writeDraft } from '$lib/services/history';
 import { describeError } from '$lib/services/ipc';
 import type { Page, ProseMirrorDocument } from '$lib/types/manuscript';
 
 export type SaveState = 'saved' | 'unsaved' | 'saving' | 'failed';
 
 type Pending = { pageId: string; document: ProseMirrorDocument };
+
+/**
+ * How often the crash journal is written during unbroken typing.
+ *
+ * This is a *throttle*, not a debounce, and the distinction is the whole point:
+ * a debounce never fires while someone is still typing, so the very session
+ * most at risk — a long unbroken run of writing — would be the one with no
+ * journal at all. A throttle bounds the loss to this interval no matter how
+ * long the run.
+ */
+const JOURNAL_INTERVAL_MS = 1_200;
 
 export class Autosave {
   state = $state<SaveState>('saved');
@@ -38,6 +50,9 @@ export class Autosave {
   private inFlight = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private debounceMs = 900;
+
+  private journalTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastJournalAt = 0;
 
   setDebounce(ms: number): void {
     this.debounceMs = Math.min(Math.max(ms, 200), 5_000);
@@ -55,6 +70,38 @@ export class Autosave {
       this.timer = null;
       void this.run();
     }, this.debounceMs);
+
+    this.journal();
+  }
+
+  /**
+   * Writes the crash journal, at most once per interval.
+   *
+   * Failures are swallowed on purpose. This is a safety net beneath autosave,
+   * and a net that shouts when it cannot be woven would be worse than one that
+   * quietly is not there — the real save is still coming, and it reports its
+   * own failures.
+   */
+  private journal(): void {
+    const elapsed = Date.now() - this.lastJournalAt;
+
+    const write = () => {
+      const job = this.pending;
+      if (!job) return;
+      this.lastJournalAt = Date.now();
+      void writeDraft(job.pageId, job.document).catch(() => {});
+    };
+
+    if (elapsed >= JOURNAL_INTERVAL_MS) {
+      write();
+      return;
+    }
+
+    if (this.journalTimer) return;
+    this.journalTimer = setTimeout(() => {
+      this.journalTimer = null;
+      write();
+    }, JOURNAL_INTERVAL_MS - elapsed);
   }
 
   /**
@@ -69,6 +116,12 @@ export class Autosave {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // A pending journal write is pointless once the real save is happening —
+    // the save clears the journal anyway.
+    if (this.journalTimer) {
+      clearTimeout(this.journalTimer);
+      this.journalTimer = null;
+    }
     await this.run();
   }
 
@@ -76,6 +129,10 @@ export class Autosave {
   forget(pageId: string): void {
     if (this.pending?.pageId === pageId) {
       this.pending = null;
+      if (this.journalTimer) {
+        clearTimeout(this.journalTimer);
+        this.journalTimer = null;
+      }
       if (!this.inFlight) this.state = 'saved';
     }
   }

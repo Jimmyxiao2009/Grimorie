@@ -10,6 +10,7 @@
   import TextField from '$lib/components/TextField.svelte';
 
   import ManuscriptTree from '$lib/manuscript/ManuscriptTree.svelte';
+  import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
   import FormatBar from '$lib/editor/FormatBar.svelte';
   import PageEditor, { type EditorState } from '$lib/editor/PageEditor.svelte';
   import SaveIndicator from '$lib/editor/SaveIndicator.svelte';
@@ -43,6 +44,8 @@
 
   let linkOpen = $state(false);
   let linkUrl = $state('');
+
+  let historyOpen = $state(false);
 
   onMount(() => {
     void workspace.open(volumeId, pageId);
@@ -122,6 +125,13 @@
     else await workspace.deletePage(target.id);
   }
 
+  async function openHistory() {
+    // Flush first, so the version list includes what was just typed rather
+    // than showing history that stops a paragraph short.
+    await autosave.flush();
+    historyOpen = true;
+  }
+
   function openLinkDialog() {
     linkUrl = (editor?.getAttributes('link')['href'] as string | undefined) ?? '';
     linkOpen = true;
@@ -195,6 +205,13 @@
 
     <div class="rail-right">
       <SaveIndicator />
+      <IconButton
+        name="restore"
+        label="History"
+        size="sm"
+        disabled={!activePage.page}
+        onclick={openHistory}
+      />
     </div>
   </header>
 
@@ -301,6 +318,20 @@
     <Button variant="danger" onclick={confirmDelete}>Delete</Button>
   {/snippet}
 </Dialog>
+
+<RevisionHistory
+  bind:open={historyOpen}
+  pageId={activePage.page?.id ?? null}
+  pageTitle={activePage.page?.title ?? ''}
+  currentText={activePage.page?.plainText ?? ''}
+  currentWords={activePage.words}
+  onrestored={(page) => {
+    // Reload rather than patching in place: restoring replaces the document,
+    // and the editor is keyed by Page id so it needs a genuinely new record.
+    void activePage.load(page.id);
+    void workspace.refresh();
+  }}
+/>
 
 <Dialog bind:open={linkOpen} title="Link" description="Leave the field empty to remove the link.">
   <TextField
