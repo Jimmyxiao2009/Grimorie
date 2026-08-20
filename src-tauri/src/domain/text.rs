@@ -12,21 +12,25 @@ use serde_json::Value;
 /// enough that it cannot be used to smuggle a paragraph into a tree row.
 pub const MAX_TITLE_LEN: usize = 200;
 
-/// ProseMirror node types that end a line in the plain-text projection.
-const BLOCK_TYPES: &[&str] = &[
+/// Node types that end a line in the plain-text projection.
+///
+/// Only *leaf* blocks — the ones that directly hold text. Containers such as
+/// lists, list items, and block quotes are deliberately absent: their children
+/// already emit the newline, and having containers emit one too would produce
+/// runs of blank lines that then had to be collapsed afterwards.
+///
+/// Avoiding that collapse is not tidiness. The frontend maps plain-text offsets
+/// back to editor positions to place annotations, and a post-processing pass
+/// that removes characters would have to be mirrored there exactly. Emitting
+/// the right string in one pass makes the two implementations trivially
+/// comparable — see `fixtures/plain-text.json`.
+const LEAF_BLOCK_TYPES: &[&str] = &[
     "paragraph",
     "heading",
-    "blockquote",
     "codeBlock",
     "code_block",
-    "listItem",
-    "list_item",
     "horizontalRule",
     "horizontal_rule",
-    "bulletList",
-    "bullet_list",
-    "orderedList",
-    "ordered_list",
 ];
 
 /// True for characters that stand alone as words: CJK ideographs, kana, and
@@ -51,22 +55,9 @@ pub fn is_cjk(ch: char) -> bool {
 pub fn plain_text_from_document(doc: &Value) -> String {
     let mut out = String::new();
     walk(doc, &mut out);
-    // Collapse the run of newlines that nested block nodes naturally produce,
-    // and drop the trailing one.
-    let mut text = String::with_capacity(out.len());
-    let mut newlines = 0usize;
-    for ch in out.chars() {
-        if ch == '\n' {
-            newlines += 1;
-            if newlines <= 2 {
-                text.push(ch);
-            }
-        } else {
-            newlines = 0;
-            text.push(ch);
-        }
-    }
-    text.trim_end().to_string()
+    // The only post-processing: the final block's trailing newline. It sits
+    // past every anchorable character, so trimming it cannot shift an offset.
+    out.trim_end_matches('\n').to_string()
 }
 
 fn walk(node: &Value, out: &mut String) {
@@ -87,7 +78,7 @@ fn walk(node: &Value, out: &mut String) {
         }
     }
 
-    if BLOCK_TYPES.contains(&node_type) {
+    if LEAF_BLOCK_TYPES.contains(&node_type) {
         out.push('\n');
     }
 }
@@ -232,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_lists_do_not_produce_runs_of_blank_lines() {
+    fn container_blocks_do_not_add_separators_of_their_own() {
         let document = doc(json!([{
             "type": "bulletList",
             "content": [
@@ -240,10 +231,42 @@ mod tests {
                 { "type": "listItem", "content": [para("beta")] }
             ]
         }]));
-        let text = plain_text_from_document(&document);
-        assert!(!text.contains("\n\n\n"), "got {text:?}");
-        assert!(text.contains("alpha"));
-        assert!(text.contains("beta"));
+        // Exactly one newline between the items. No collapse pass is involved,
+        // which is what lets the frontend mirror this walk exactly.
+        assert_eq!(plain_text_from_document(&document), "alpha\nbeta");
+    }
+
+    /// The contract the frontend's offset map is held to.
+    ///
+    /// Annotation anchors are character offsets into this text, computed here
+    /// and resolved to editor positions in the frontend. If the two walks ever
+    /// disagreed, annotations would attach to the wrong words — so both sides
+    /// are tested against the same file.
+    #[test]
+    fn matches_the_shared_plain_text_fixtures() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            document: Value,
+            text: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixtures {
+            cases: Vec<Case>,
+        }
+
+        let raw = include_str!("../../../fixtures/plain-text.json");
+        let fixtures: Fixtures = serde_json::from_str(raw).expect("fixtures parse");
+        assert!(fixtures.cases.len() >= 10, "fixtures look truncated");
+
+        for case in fixtures.cases {
+            assert_eq!(
+                plain_text_from_document(&case.document),
+                case.text,
+                "fixture: {}",
+                case.name
+            );
+        }
     }
 
     #[test]

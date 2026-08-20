@@ -1,0 +1,171 @@
+{
+  "$comment": [
+    "Shared between the Rust text derivation and the TypeScript offset map.",
+    "",
+    "Both sides must produce exactly the same string for each document here.",
+    "That equality is load-bearing: annotation anchors are character offsets",
+    "into this text, computed in Rust and resolved to editor positions in the",
+    "frontend. If the two walks ever disagreed, annotations would silently",
+    "attach to the wrong words — which is the one failure this design exists",
+    "to prevent. Tests on both sides read this file."
+  ],
+  "cases": [
+    {
+      "name": "single paragraph",
+      "document": {
+        "type": "doc",
+        "content": [
+          { "type": "paragraph", "content": [{ "type": "text", "text": "The salt road." }] }
+        ]
+      },
+      "text": "The salt road."
+    },
+    {
+      "name": "paragraphs are separated by one newline",
+      "document": {
+        "type": "doc",
+        "content": [
+          { "type": "paragraph", "content": [{ "type": "text", "text": "First." }] },
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Second." }] }
+        ]
+      },
+      "text": "First.\nSecond."
+    },
+    {
+      "name": "marks contribute their text and nothing else",
+      "document": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "The " },
+              { "type": "text", "text": "salt", "marks": [{ "type": "italic" }] },
+              { "type": "text", "text": " road." }
+            ]
+          }
+        ]
+      },
+      "text": "The salt road."
+    },
+    {
+      "name": "a hard break is a newline",
+      "document": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "one" },
+              { "type": "hardBreak" },
+              { "type": "text", "text": "two" }
+            ]
+          }
+        ]
+      },
+      "text": "one\ntwo"
+    },
+    {
+      "name": "headings end a line like any other leaf block",
+      "document": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": { "level": 2 },
+            "content": [{ "type": "text", "text": "Chapter III" }]
+          },
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Wind and ash." }] }
+        ]
+      },
+      "text": "Chapter III\nWind and ash."
+    },
+    {
+      "name": "list containers do not add newlines of their own",
+      "document": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bulletList",
+            "content": [
+              {
+                "type": "listItem",
+                "content": [
+                  { "type": "paragraph", "content": [{ "type": "text", "text": "alpha" }] }
+                ]
+              },
+              {
+                "type": "listItem",
+                "content": [
+                  { "type": "paragraph", "content": [{ "type": "text", "text": "beta" }] }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "text": "alpha\nbeta"
+    },
+    {
+      "name": "a block quote wraps paragraphs without doubling separators",
+      "document": {
+        "type": "doc",
+        "content": [
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Before." }] },
+          {
+            "type": "blockquote",
+            "content": [
+              { "type": "paragraph", "content": [{ "type": "text", "text": "Quoted." }] }
+            ]
+          },
+          { "type": "paragraph", "content": [{ "type": "text", "text": "After." }] }
+        ]
+      },
+      "text": "Before.\nQuoted.\nAfter."
+    },
+    {
+      "name": "a horizontal rule contributes only a line ending",
+      "document": {
+        "type": "doc",
+        "content": [
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Above." }] },
+          { "type": "horizontalRule" },
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Below." }] }
+        ]
+      },
+      "text": "Above.\n\nBelow."
+    },
+    {
+      "name": "empty paragraphs still end their line",
+      "document": {
+        "type": "doc",
+        "content": [
+          { "type": "paragraph", "content": [{ "type": "text", "text": "One." }] },
+          { "type": "paragraph" },
+          { "type": "paragraph", "content": [{ "type": "text", "text": "Two." }] }
+        ]
+      },
+      "text": "One.\n\nTwo."
+    },
+    {
+      "name": "an empty document is an empty string",
+      "document": { "type": "doc", "content": [{ "type": "paragraph" }] },
+      "text": ""
+    },
+    {
+      "name": "mixed scripts are preserved exactly",
+      "document": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "手稿属于用户。The manuscript belongs to the user." }
+            ]
+          }
+        ]
+      },
+      "text": "手稿属于用户。The manuscript belongs to the user."
+    }
+  ]
+}
