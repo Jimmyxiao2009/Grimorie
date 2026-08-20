@@ -206,6 +206,16 @@ pub fn delete(conn: &Connection, id: VolumeId) -> Result<()> {
     // The index is a virtual table with no foreign keys into the manuscript, so
     // the cascade that removes chapters and pages cannot reach it.
     search::remove_volume(conn, id)?;
+    // Tag attachments carry no foreign key — entity_id points at one of three
+    // tables — so they are cleared explicitly, for the Volume and everything
+    // beneath it.
+    for chapter in super::chapters::list(conn, id)? {
+        for page in super::pages::summaries(conn, chapter.id)? {
+            super::bookmarks::forget_entity(conn, &page.id.to_string())?;
+        }
+        super::bookmarks::forget_entity(conn, &chapter.id.to_string())?;
+    }
+    super::bookmarks::forget_entity(conn, &id.to_string())?;
     let changed = conn.execute("DELETE FROM volumes WHERE id = ?1", params![id])?;
     if changed == 0 {
         return Err(AppError::not_found("Volume"));

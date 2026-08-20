@@ -6,6 +6,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import IconButton from '$lib/components/IconButton.svelte';
   import TextField from '$lib/components/TextField.svelte';
+  import TagRow from './TagRow.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import {
     AUTHORABLE_KINDS,
@@ -136,6 +137,8 @@
       {/each}
     {/if}
   </div>
+
+  <TagRow {pageId} />
 
   <footer class="foot">
     <Button variant="secondary" size="sm" icon="plus" block disabled={!pageId} onclick={beginNote}>

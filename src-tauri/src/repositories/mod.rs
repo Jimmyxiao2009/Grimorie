@@ -6,6 +6,7 @@
 //! [`crate::database::Database::transaction`].
 
 pub mod annotations;
+pub mod bookmarks;
 pub mod chapters;
 pub mod drafts;
 pub mod pages;

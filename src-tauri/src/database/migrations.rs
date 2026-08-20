@@ -52,6 +52,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "search",
         sql: include_str!("../../migrations/005_search.sql"),
     },
+    Migration {
+        version: 6,
+        name: "bookmarks_tags",
+        sql: include_str!("../../migrations/006_bookmarks_tags.sql"),
+    },
 ];
 
 #[derive(Debug, Default, PartialEq)]

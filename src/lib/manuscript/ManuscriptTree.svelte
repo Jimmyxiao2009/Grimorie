@@ -3,6 +3,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import IconButton from '$lib/components/IconButton.svelte';
   import Menu from '$lib/components/Menu.svelte';
+  import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { count } from '$lib/utils/format';
   import type { ChapterOutline, PageSummary } from '$lib/types/manuscript';
@@ -56,6 +57,13 @@
         label: 'Rename…',
         icon: 'pencil',
         select: () => onrename({ kind: 'page', id: page.id, title: page.title })
+      },
+      {
+        id: 'bookmark',
+        label: bookmarks.isMarked(page.id) ? 'Remove bookmark' : 'Bookmark',
+        icon: 'bookmark',
+        hint: 'Ctrl+B',
+        select: () => void bookmarks.toggle(page.id)
       },
       {
         id: 'duplicate',
@@ -119,6 +127,11 @@
                 <li>
                   <div class="row page-row" class:active={workspace.activePageId === page.id}>
                     <button type="button" class="page-open" onclick={() => selectPage(page.id)}>
+                      {#if bookmarks.isMarked(page.id)}
+                        <span class="marked" title="Bookmarked">
+                          <Icon name="bookmark" size={12} />
+                        </span>
+                      {/if}
                       <span class="page-title truncate">{page.title}</span>
                       {#if page.wordCount > 0}
                         <span class="tally tabular">{count(page.wordCount)}</span>
@@ -265,6 +278,12 @@
     min-height: var(--touch-min);
     padding: 0 var(--space-2);
     border-radius: var(--radius-md);
+  }
+
+  .marked {
+    flex: none;
+    display: inline-flex;
+    color: var(--accent);
   }
 
   .page-title {

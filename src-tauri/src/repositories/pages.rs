@@ -218,6 +218,7 @@ pub fn delete(conn: &Connection, id: PageId) -> Result<()> {
         search::remove(conn, &annotation.id.to_string())?;
     }
     search::remove(conn, &id.to_string())?;
+    super::bookmarks::forget_entity(conn, &id.to_string())?;
     conn.execute("DELETE FROM pages WHERE id = ?1", params![id])?;
     normalise_positions(conn, "pages", "chapter_id", &page.chapter_id.to_string())
 }

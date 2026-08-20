@@ -9,6 +9,7 @@
 //! stays a designed surface instead of an RPC dump.
 
 pub mod annotations;
+pub mod bookmarks;
 pub mod history;
 pub mod manuscript;
 pub mod search;

@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A few margin notes, including one anchored to text that exists and one
     // whose text has since changed — so the stale path is visible too.
     let crows_text = repositories::pages::get(&conn, crows.id)?.plain_text;
-    let mut anchor_on =
+    let anchor_on =
         |phrase: &str, kind, body: &str| -> Result<(), Box<dyn std::error::Error>> {
             if let Some(byte) = crows_text.find(phrase) {
                 let from = crows_text[..byte].chars().count() as i64;

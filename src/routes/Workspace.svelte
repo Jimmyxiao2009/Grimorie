@@ -13,6 +13,7 @@
   import Margin from '$lib/annotations/Margin.svelte';
   import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
   import SearchDialog from '$lib/search/SearchDialog.svelte';
+  import BookmarksDialog from '$lib/bookmarks/BookmarksDialog.svelte';
   import { setHighlightRanges, type HighlightRange } from '$lib/editor/highlights';
   import { textRangeToSelection } from '$lib/editor/offsets';
   import FormatBar from '$lib/editor/FormatBar.svelte';
@@ -23,6 +24,7 @@
   import { viewport } from '$lib/design/viewport.svelte';
   import { activePage } from '$lib/stores/page.svelte';
   import { router } from '$lib/stores/router.svelte';
+  import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
@@ -53,10 +55,12 @@
 
   let historyOpen = $state(false);
   let searchOpen = $state(false);
+  let bookmarksOpen = $state(false);
 
 
   onMount(() => {
     void workspace.open(volumeId, pageId);
+    void bookmarks.loadForVolume(volumeId);
     margin.start();
     autosave.onsaved = (saved) => activePage.adoptSaved(saved);
 
@@ -75,6 +79,7 @@
       workspace.close();
       activePage.clear();
       margin.clear();
+      bookmarks.clear();
     };
   });
 
@@ -233,6 +238,11 @@
         event.preventDefault();
         searchOpen = true;
         break;
+      case 'b':
+        event.preventDefault();
+        if (event.shiftKey) bookmarksOpen = true;
+        else if (workspace.activePageId) await bookmarks.toggle(workspace.activePageId);
+        break;
     }
   }
 </script>
@@ -267,6 +277,15 @@
     <div class="rail-right">
       <SaveIndicator />
       <IconButton name="search" label="Search" size="sm" onclick={() => (searchOpen = true)} />
+      <IconButton
+        name="bookmark"
+        label={bookmarks.isMarked(workspace.activePageId) ? 'Remove bookmark' : 'Bookmark this Page'}
+        size="sm"
+        tone={bookmarks.isMarked(workspace.activePageId) ? 'accent' : 'default'}
+        pressed={bookmarks.isMarked(workspace.activePageId)}
+        disabled={!workspace.activePageId}
+        onclick={() => workspace.activePageId && bookmarks.toggle(workspace.activePageId)}
+      />
       <IconButton
         name="restore"
         label="History"
@@ -419,6 +438,18 @@
     />
   </aside>
 {/if}
+
+<BookmarksDialog
+  bind:open={bookmarksOpen}
+  volumeId={workspace.volume?.id ?? null}
+  onselect={(bookmark) => {
+    if (bookmark.volumeId !== workspace.volume?.id) {
+      router.toWorkspace(bookmark.volumeId, bookmark.pageId);
+      return;
+    }
+    workspace.selectPage(bookmark.pageId);
+  }}
+/>
 
 <SearchDialog
   bind:open={searchOpen}
