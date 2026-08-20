@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.svelte-kit/
+src-tauri/target/
+src-tauri/gen/
+
+# Test output
+coverage/
+test-results/
+playwright-report/
+.vitest/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local environment — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime data (developer scratch databases, backups)
+*.local
+/.grimoire-dev/
