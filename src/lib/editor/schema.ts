@@ -17,6 +17,7 @@ import CharacterCount from '@tiptap/extension-character-count';
 import Placeholder from '@tiptap/extension-placeholder';
 import TextAlign from '@tiptap/extension-text-align';
 import type { Extensions } from '@tiptap/core';
+import { AnnotationHighlights } from './highlights';
 
 export const HEADING_LEVELS = [1, 2, 3] as const;
 
@@ -47,6 +48,10 @@ export function buildExtensions(placeholder: string): Extensions {
 
     // Live counts for the status line. The authoritative numbers still come
     // from the backend on save; these keep the display honest between saves.
-    CharacterCount.configure({ limit: null })
+    CharacterCount.configure({ limit: null }),
+
+    // Draws annotated ranges. Decorations rather than marks, so annotating a
+    // sentence never modifies the document.
+    AnnotationHighlights
   ];
 }

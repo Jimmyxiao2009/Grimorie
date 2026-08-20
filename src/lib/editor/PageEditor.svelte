@@ -5,6 +5,13 @@
     marks: Record<string, boolean>;
     canUndo: boolean;
     canRedo: boolean;
+    /**
+     * The selection in plain-text offsets — the coordinates annotation anchors
+     * are stored in — or null when nothing is selected.
+     */
+    selection: { from: number; to: number; text: string } | null;
+    /** Maps between plain-text offsets and editor positions. */
+    offsets: OffsetMap;
   };
 </script>
 
@@ -13,6 +20,8 @@
   import { Editor } from '@tiptap/core';
   import { buildExtensions } from './schema';
   import { autosave } from './autosave.svelte';
+  import { buildOffsetMap, selectionToTextRange, type OffsetMap } from './offsets';
+  import type { Node as PMNode } from '@tiptap/pm/model';
   import type { Page, ProseMirrorDocument } from '$lib/types/manuscript';
 
   interface Props {
@@ -37,6 +46,20 @@
   let host = $state<HTMLDivElement | null>(null);
   let editor: Editor | null = null;
   let frame = 0;
+
+  // The offset map is rebuilt only when the document actually changes. Moving
+  // the caret happens far more often than editing, and walking the whole
+  // manuscript on every arrow key would be wasted work.
+  let mappedDoc: PMNode | null = null;
+  let offsets: OffsetMap = { text: '', segments: [] };
+
+  function currentOffsets(doc: PMNode): OffsetMap {
+    if (mappedDoc !== doc) {
+      offsets = buildOffsetMap(doc);
+      mappedDoc = doc;
+    }
+    return offsets;
+  }
 
   // Captured once, on purpose. Later prop updates — a Page object replaced
   // after a save — must not be able to redirect this editor's writes to a
@@ -72,7 +95,16 @@
         | { words: () => number; characters: () => number }
         | undefined;
 
+      const map = currentOffsets(editor.state.doc);
+      const { from, to, empty } = editor.state.selection;
+      const range = empty ? null : selectionToTextRange(map, from, to);
+
       onstate({
+        selection:
+          range && range.to > range.from
+            ? { ...range, text: map.text.slice(range.from, range.to) }
+            : null,
+        offsets: map,
         words: counter?.words() ?? 0,
         characters: counter?.characters() ?? 0,
         marks: {
@@ -255,5 +287,50 @@
 
   :global(.manuscript ::selection) {
     background: var(--accent-quiet);
+  }
+
+  /* Annotated text.
+     An underline rather than a highlighter fill: a page with a dozen notes on
+     it must still read as prose, and a block of colour behind a sentence
+     fights the words for attention. */
+  :global(.manuscript .annotated) {
+    background: none;
+    border-bottom: 2px solid var(--annotation-tint, var(--text-tertiary));
+    /* Sits just clear of descenders, so the rule does not cut through a "g". */
+    padding-bottom: 1px;
+  }
+
+  :global(.manuscript .annotated-note) {
+    --annotation-tint: var(--text-tertiary);
+  }
+
+  :global(.manuscript .annotated-question) {
+    --annotation-tint: var(--state-info);
+  }
+
+  :global(.manuscript .annotated-suggestion) {
+    --annotation-tint: var(--state-success);
+  }
+
+  :global(.manuscript .annotated-warning) {
+    --annotation-tint: var(--state-warning);
+  }
+
+  :global(.manuscript .annotated-reference),
+  :global(.manuscript .annotated-ai-review),
+  :global(.manuscript .annotated-ai-suggestion) {
+    --annotation-tint: var(--state-ai);
+  }
+
+  /* A stale anchor is drawn dotted: the note is still there, but Grimoire is
+     no longer certain these are the words it meant. */
+  :global(.manuscript .annotated-stale) {
+    border-bottom-style: dotted;
+    opacity: 0.7;
+  }
+
+  :global(.manuscript .annotated-focused) {
+    background: var(--accent-quiet);
+    border-radius: 2px;
   }
 </style>
