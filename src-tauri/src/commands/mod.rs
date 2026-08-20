@@ -11,6 +11,7 @@
 pub mod annotations;
 pub mod history;
 pub mod manuscript;
+pub mod search;
 pub mod settings;
 pub mod volumes;
 

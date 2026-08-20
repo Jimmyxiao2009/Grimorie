@@ -8,6 +8,20 @@ use crate::domain::annotation::{
 use crate::domain::ids::{AnnotationId, PageId};
 use crate::domain::manuscript::now;
 use crate::error::{AppError, Result};
+use crate::search::{self, EntityKind};
+
+fn reindex(conn: &Connection, annotation: &Annotation) -> Result<()> {
+    let chapter_id = super::pages::get(conn, annotation.page_id)?.chapter_id;
+    let volume_id = super::chapters::get(conn, chapter_id)?.volume_id;
+    search::index(
+        conn,
+        EntityKind::Annotation,
+        &annotation.id.to_string(),
+        Some(&volume_id.to_string()),
+        "",
+        &annotation.body,
+    )
+}
 
 fn map(row: &Row<'_>) -> rusqlite::Result<Annotation> {
     let target = if row.get::<_, String>("target_kind")? == "range" {
@@ -103,6 +117,7 @@ pub fn create_anchored(
 
     let annotation = Annotation::create(page_id, kind, body, AnnotationTarget::Range(anchor));
     insert(conn, &annotation)?;
+    reindex(conn, &annotation)?;
     Ok(annotation)
 }
 
@@ -115,6 +130,7 @@ pub fn create_for_page(
     super::pages::get(conn, page_id)?;
     let annotation = Annotation::create(page_id, kind, body, AnnotationTarget::Page);
     insert(conn, &annotation)?;
+    reindex(conn, &annotation)?;
     Ok(annotation)
 }
 
@@ -171,7 +187,9 @@ pub fn update_body(conn: &Connection, id: AnnotationId, body: &str) -> Result<An
     if changed == 0 {
         return Err(AppError::not_found("annotation"));
     }
-    get(conn, id)
+    let updated = get(conn, id)?;
+    reindex(conn, &updated)?;
+    Ok(updated)
 }
 
 pub fn set_status(
@@ -190,6 +208,7 @@ pub fn set_status(
 }
 
 pub fn delete(conn: &Connection, id: AnnotationId) -> Result<()> {
+    search::remove(conn, &id.to_string())?;
     let changed = conn.execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
     if changed == 0 {
         return Err(AppError::not_found("annotation"));

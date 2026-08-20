@@ -14,6 +14,24 @@ use crate::domain::{ChapterId, Page, PageSummary, VolumeId};
 use crate::error::{AppError, Result};
 
 use super::{apply_order, next_position, normalise_positions};
+use crate::search::{self, EntityKind};
+
+/// Writes a Page's searchable text.
+///
+/// Called from every path that changes a Page's title or body. The index is a
+/// virtual table with no foreign keys into the manuscript, so nothing cascades
+/// into it and every write has to be explicit.
+fn reindex(conn: &Connection, page: &Page) -> Result<()> {
+    let volume_id = super::chapters::get(conn, page.chapter_id)?.volume_id;
+    search::index(
+        conn,
+        EntityKind::Page,
+        &page.id.to_string(),
+        Some(&volume_id.to_string()),
+        &page.title,
+        &page.plain_text,
+    )
+}
 
 fn map(row: &Row<'_>) -> rusqlite::Result<Page> {
     let raw: String = row.get("document_json")?;
@@ -90,6 +108,7 @@ pub fn create(conn: &Connection, chapter_id: ChapterId, title: &str) -> Result<P
     let position = next_position(conn, "pages", "chapter_id", &chapter_id.to_string())?;
     let page = Page::create(chapter_id, title, position);
     insert_raw(conn, &page, &serde_json::to_string(&page.document)?)?;
+    reindex(conn, &page)?;
     Ok(page)
 }
 
@@ -170,7 +189,9 @@ pub fn save_document(conn: &Connection, id: PageId, document: Value) -> Result<P
         return Err(AppError::not_found("Page"));
     }
 
-    get(conn, id)
+    let saved = get(conn, id)?;
+    reindex(conn, &saved)?;
+    Ok(saved)
 }
 
 pub fn rename(conn: &Connection, id: PageId, title: &str) -> Result<Page> {
@@ -185,11 +206,18 @@ pub fn rename(conn: &Connection, id: PageId, title: &str) -> Result<Page> {
     if changed == 0 {
         return Err(AppError::not_found("Page"));
     }
-    get(conn, id)
+    let renamed = get(conn, id)?;
+    reindex(conn, &renamed)?;
+    Ok(renamed)
 }
 
 pub fn delete(conn: &Connection, id: PageId) -> Result<()> {
     let page = get(conn, id)?;
+    // Annotations cascade away with the Page, but their index entries do not.
+    for annotation in super::annotations::list(conn, id)? {
+        search::remove(conn, &annotation.id.to_string())?;
+    }
+    search::remove(conn, &id.to_string())?;
     conn.execute("DELETE FROM pages WHERE id = ?1", params![id])?;
     normalise_positions(conn, "pages", "chapter_id", &page.chapter_id.to_string())
 }
@@ -250,6 +278,7 @@ pub fn duplicate(conn: &Connection, id: PageId) -> Result<Page> {
     copy.word_count = source.word_count;
     copy.character_count = source.character_count;
     insert_raw(conn, &copy, &serde_json::to_string(&source.document)?)?;
+    reindex(conn, &copy)?;
 
     get(conn, copy.id)
 }

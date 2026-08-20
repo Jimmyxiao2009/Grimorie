@@ -6,6 +6,18 @@ use crate::domain::manuscript::{CoverTint, Volume, VolumeSummary, now};
 use crate::domain::text::normalise_title;
 use crate::domain::{ChapterId, PageId, VolumeId};
 use crate::error::{AppError, Result};
+use crate::search::{self, EntityKind};
+
+fn reindex(conn: &Connection, volume: &Volume) -> Result<()> {
+    search::index(
+        conn,
+        EntityKind::Volume,
+        &volume.id.to_string(),
+        Some(&volume.id.to_string()),
+        &volume.title,
+        volume.subtitle.as_deref().unwrap_or(""),
+    )
+}
 
 const COLUMNS: &str =
     "id, title, subtitle, description, tint, created_at, updated_at, last_opened_at, archived_at";
@@ -52,6 +64,7 @@ pub fn create(
 ) -> Result<Volume> {
     let volume = Volume::create(title, subtitle, description);
     insert(conn, &volume)?;
+    reindex(conn, &volume)?;
     Ok(volume)
 }
 
@@ -161,7 +174,9 @@ pub fn update_details(
     if changed == 0 {
         return Err(AppError::not_found("Volume"));
     }
-    get(conn, id)
+    let updated = get(conn, id)?;
+    reindex(conn, &updated)?;
+    Ok(updated)
 }
 
 pub fn set_archived(conn: &Connection, id: VolumeId, archived: bool) -> Result<Volume> {
@@ -188,6 +203,9 @@ pub fn touch_opened(conn: &Connection, id: VolumeId) -> Result<()> {
 }
 
 pub fn delete(conn: &Connection, id: VolumeId) -> Result<()> {
+    // The index is a virtual table with no foreign keys into the manuscript, so
+    // the cascade that removes chapters and pages cannot reach it.
+    search::remove_volume(conn, id)?;
     let changed = conn.execute("DELETE FROM volumes WHERE id = ?1", params![id])?;
     if changed == 0 {
         return Err(AppError::not_found("Volume"));
@@ -208,6 +226,7 @@ pub fn duplicate(conn: &Connection, id: VolumeId) -> Result<Volume> {
     );
     copy.tint = source.tint;
     insert(conn, &copy)?;
+    reindex(conn, &copy)?;
 
     let mut chapter_statement = conn.prepare(
         "SELECT id, title, position FROM chapters WHERE volume_id = ?1 ORDER BY position",

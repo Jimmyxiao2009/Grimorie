@@ -16,6 +16,7 @@ pub mod database;
 pub mod domain;
 pub mod error;
 pub mod repositories;
+pub mod search;
 
 #[cfg(test)]
 mod integration;
@@ -115,6 +116,8 @@ pub fn run() {
             commands::history::drafts_recoverable,
             commands::history::draft_recover,
             commands::history::draft_discard,
+            commands::search::search_query,
+            commands::search::search_rebuild,
             commands::settings::settings_get,
             commands::settings::settings_save,
         ])

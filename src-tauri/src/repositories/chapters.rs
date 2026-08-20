@@ -8,6 +8,18 @@ use crate::domain::{Chapter, ChapterId, VolumeId};
 use crate::error::{AppError, Result};
 
 use super::{apply_order, next_position, normalise_positions};
+use crate::search::{self, EntityKind};
+
+fn reindex(conn: &Connection, chapter: &Chapter) -> Result<()> {
+    search::index(
+        conn,
+        EntityKind::Chapter,
+        &chapter.id.to_string(),
+        Some(&chapter.volume_id.to_string()),
+        &chapter.title,
+        "",
+    )
+}
 
 const COLUMNS: &str = "id, volume_id, title, position, created_at, updated_at";
 
@@ -46,6 +58,7 @@ pub fn create(conn: &Connection, volume_id: VolumeId, title: &str) -> Result<Cha
     let position = next_position(conn, "chapters", "volume_id", &volume_id.to_string())?;
     let chapter = Chapter::create(volume_id, title, position);
     insert(conn, &chapter)?;
+    reindex(conn, &chapter)?;
     Ok(chapter)
 }
 

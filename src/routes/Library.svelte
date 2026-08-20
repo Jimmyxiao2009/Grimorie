@@ -4,11 +4,14 @@
   import Dialog from '$lib/components/Dialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import TextField from '$lib/components/TextField.svelte';
+  import IconButton from '$lib/components/IconButton.svelte';
+  import SearchDialog from '$lib/search/SearchDialog.svelte';
   import VolumeCard from '$lib/library/VolumeCard.svelte';
   import { libraryStore } from '$lib/stores/library.svelte';
   import { router } from '$lib/stores/router.svelte';
   import type { Shelf, VolumeSummary } from '$lib/types/manuscript';
 
+  let searchOpen = $state(false);
   let creating = $state(false);
   let newTitle = $state('');
   let newSubtitle = $state('');
@@ -110,6 +113,7 @@
         {/each}
       </div>
 
+      <IconButton name="search" label="Search your library" onclick={() => (searchOpen = true)} />
       <Button variant="primary" icon="plus" onclick={beginCreate}>New Volume</Button>
     </div>
   </header>
@@ -180,6 +184,11 @@
     </section>
   {/if}
 </div>
+
+<SearchDialog
+  bind:open={searchOpen}
+  onselect={(hit) => router.toWorkspace(hit.volumeId, hit.pageId)}
+/>
 
 <Dialog bind:open={creating} title="New Volume" description="A Volume holds one work.">
   <div class="form">

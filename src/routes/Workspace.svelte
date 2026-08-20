@@ -12,6 +12,7 @@
   import ManuscriptTree from '$lib/manuscript/ManuscriptTree.svelte';
   import Margin from '$lib/annotations/Margin.svelte';
   import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
+  import SearchDialog from '$lib/search/SearchDialog.svelte';
   import { setHighlightRanges, type HighlightRange } from '$lib/editor/highlights';
   import { textRangeToSelection } from '$lib/editor/offsets';
   import FormatBar from '$lib/editor/FormatBar.svelte';
@@ -51,6 +52,7 @@
   let linkUrl = $state('');
 
   let historyOpen = $state(false);
+  let searchOpen = $state(false);
 
 
   onMount(() => {
@@ -225,6 +227,12 @@
         else if (chapterOf) await workspace.createPage(chapterOf.id);
         else if (workspace.chapters[0]) await workspace.createPage(workspace.chapters[0].id);
         break;
+      case 'f':
+        // Ctrl+F searches this Volume, Ctrl+Shift+F the whole library. Both
+        // open the same panel, which can switch scope without retyping.
+        event.preventDefault();
+        searchOpen = true;
+        break;
     }
   }
 </script>
@@ -258,6 +266,7 @@
 
     <div class="rail-right">
       <SaveIndicator />
+      <IconButton name="search" label="Search" size="sm" onclick={() => (searchOpen = true)} />
       <IconButton
         name="restore"
         label="History"
@@ -410,6 +419,19 @@
     />
   </aside>
 {/if}
+
+<SearchDialog
+  bind:open={searchOpen}
+  volumeId={workspace.volume?.id ?? null}
+  volumeTitle={workspace.volume?.title ?? null}
+  onselect={(hit) => {
+    if (hit.volumeId && hit.volumeId !== workspace.volume?.id) {
+      router.toWorkspace(hit.volumeId, hit.pageId);
+      return;
+    }
+    if (hit.pageId) workspace.selectPage(hit.pageId);
+  }}
+/>
 
 <RevisionHistory
   bind:open={historyOpen}
