@@ -81,3 +81,100 @@ fn apply_order(
 
     normalise_positions(conn, table, parent_column, parent_id)
 }
+
+/// A Volume's whole structure, without any documents.
+///
+/// Two queries regardless of size: the chapter list, and every page summary in
+/// the Volume. Assembling the tree per chapter would be N+1 queries for
+/// something drawn on every navigation.
+pub fn outline(
+    conn: &Connection,
+    volume_id: crate::domain::VolumeId,
+) -> Result<crate::domain::Outline> {
+    use crate::domain::{ChapterOutline, Outline};
+
+    let volume = volumes::get(conn, volume_id)?;
+    let chapters = chapters::list(conn, volume_id)?;
+    let mut summaries = pages::summaries_for_volume(conn, volume_id)?;
+
+    let chapters = chapters
+        .into_iter()
+        .map(|chapter| {
+            // `summaries` arrives in manuscript order, so each chapter's pages
+            // are a contiguous run that can be split off rather than searched.
+            let taken = summaries
+                .iter()
+                .position(|page| page.chapter_id != chapter.id)
+                .unwrap_or(summaries.len());
+            let pages = summaries.drain(..taken).collect();
+            ChapterOutline { chapter, pages }
+        })
+        .collect();
+
+    Ok(Outline { volume, chapters })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::testing::TempDatabase;
+
+    #[test]
+    fn an_outline_groups_pages_under_their_chapters() {
+        let db = TempDatabase::open();
+        let conn = db.get().unwrap();
+
+        let volume = volumes::create(&conn, "A", None, None).unwrap();
+        let one = chapters::create(&conn, volume.id, "One").unwrap();
+        let two = chapters::create(&conn, volume.id, "Two").unwrap();
+
+        pages::create(&conn, one.id, "1a").unwrap();
+        pages::create(&conn, one.id, "1b").unwrap();
+        pages::create(&conn, two.id, "2a").unwrap();
+
+        let outline = outline(&conn, volume.id).unwrap();
+        assert_eq!(outline.volume.id, volume.id);
+        assert_eq!(outline.chapters.len(), 2);
+        assert_eq!(
+            outline.chapters[0]
+                .pages
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>(),
+            ["1a", "1b"]
+        );
+        assert_eq!(
+            outline.chapters[1]
+                .pages
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>(),
+            ["2a"]
+        );
+    }
+
+    #[test]
+    fn an_empty_chapter_appears_with_no_pages() {
+        let db = TempDatabase::open();
+        let conn = db.get().unwrap();
+
+        let volume = volumes::create(&conn, "A", None, None).unwrap();
+        chapters::create(&conn, volume.id, "Empty").unwrap();
+        let full = chapters::create(&conn, volume.id, "Full").unwrap();
+        pages::create(&conn, full.id, "p").unwrap();
+
+        let outline = outline(&conn, volume.id).unwrap();
+        assert!(outline.chapters[0].pages.is_empty());
+        assert_eq!(outline.chapters[1].pages.len(), 1);
+    }
+
+    #[test]
+    fn a_volume_with_no_chapters_outlines_cleanly() {
+        let db = TempDatabase::open();
+        let conn = db.get().unwrap();
+        let volume = volumes::create(&conn, "A", None, None).unwrap();
+
+        let outline = outline(&conn, volume.id).unwrap();
+        assert!(outline.chapters.is_empty());
+    }
+}

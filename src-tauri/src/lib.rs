@@ -4,13 +4,26 @@
 //! storage, and AI transport. It does no presentation work. See
 //! `docs/architecture.md` for the boundary this crate is held to.
 
-mod database;
-mod domain;
-mod error;
+mod app_state;
+mod commands;
 mod logging;
-mod repositories;
+
+// Public so development tools — the seed example, and any future maintenance
+// utility — can build a library without going through the GUI. These are the
+// same paths the app itself uses, so a tool cannot drift from the real
+// behaviour.
+pub mod database;
+pub mod domain;
+pub mod error;
+pub mod repositories;
+
+#[cfg(test)]
+mod integration;
 
 use tauri::{Manager, Window};
+
+use app_state::AppState;
+use database::Database;
 
 /// Reported by the frontend once the first paint is complete, so the window can
 /// be revealed without a flash of unstyled white.
@@ -23,11 +36,12 @@ fn app_ready(window: Window) {
 
 /// Build metadata, so the About screen states facts rather than a hardcoded string.
 #[tauri::command]
-fn app_info() -> serde_json::Value {
+fn app_info(state: tauri::State<'_, AppState>) -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "sqliteVersion": rusqlite::version(),
         "debug": cfg!(debug_assertions),
+        "libraryPath": state.database().path().to_string_lossy(),
     })
 }
 
@@ -42,9 +56,54 @@ pub fn run() {
                 app.manage(guard);
             }
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "grimoire starting");
+
+            // The library is one file in the app's data directory: easy to
+            // find, easy to back up, easy to take away. That is what "the
+            // manuscript belongs to the user" has to mean in practice.
+            //
+            // GRIMOIRE_LIBRARY points it somewhere else — an external drive, a
+            // synced folder, or a scratch copy for development.
+            let library = match std::env::var_os("GRIMOIRE_LIBRARY") {
+                Some(path) => std::path::PathBuf::from(path),
+                None => app.path().app_data_dir()?.join("grimoire.db"),
+            };
+            let db = Database::open(&library).inspect_err(|err| {
+                tracing::error!(error = %err, "could not open the library");
+            })?;
+            tracing::info!(path = ?db.path(), "library opened");
+            app.manage(AppState::new(db));
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_ready, app_info])
+        .invoke_handler(tauri::generate_handler![
+            app_ready,
+            app_info,
+            commands::volumes::volumes_list,
+            commands::volumes::volume_create,
+            commands::volumes::volume_get,
+            commands::volumes::volume_open,
+            commands::volumes::volume_outline,
+            commands::volumes::volume_update,
+            commands::volumes::volume_set_archived,
+            commands::volumes::volume_duplicate,
+            commands::volumes::volume_delete,
+            commands::manuscript::chapter_create,
+            commands::manuscript::chapter_rename,
+            commands::manuscript::chapter_duplicate,
+            commands::manuscript::chapter_delete,
+            commands::manuscript::chapter_reorder,
+            commands::manuscript::page_create,
+            commands::manuscript::page_get,
+            commands::manuscript::page_summaries,
+            commands::manuscript::page_save,
+            commands::manuscript::page_rename,
+            commands::manuscript::page_duplicate,
+            commands::manuscript::page_delete,
+            commands::manuscript::page_reorder,
+            commands::manuscript::page_move,
+            commands::settings::settings_get,
+            commands::settings::settings_save,
+        ])
         .run(tauri::generate_context!())
         .expect("Grimoire failed to start");
 
