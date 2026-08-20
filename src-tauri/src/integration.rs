@@ -272,3 +272,135 @@ fn cjk_and_mixed_script_manuscripts_round_trip_intact() {
     let reloaded = repositories::outline(&conn, volume.id).unwrap();
     assert_eq!(reloaded.chapters[0].chapter.title, "第三章 — 风与灰烬");
 }
+
+#[test]
+fn applying_a_suggestion_is_safe_undoable_and_refuses_when_the_text_moved_on() {
+    use crate::ai::apply;
+    use crate::repositories::ai::SuggestionStatus;
+
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(dir.path().join("grimoire.db")).unwrap();
+    let conn = db.get().unwrap();
+
+    let volume = repositories::volumes::create(&conn, "The Salt Road", None, None).unwrap();
+    let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+    let page = repositories::pages::create(&conn, chapter.id, "The Crows").unwrap();
+    repositories::save_page(&conn, page.id, document("The road had been salt once.")).unwrap();
+
+    let text = repositories::pages::get(&conn, page.id).unwrap().plain_text;
+    let from = text.find("salt").unwrap() as i64;
+    let to = from + 4;
+
+    // --- A suggestion applied against unchanged text lands exactly. ---
+    let suggestion =
+        repositories::ai::create_suggestion(&conn, page.id, None, from, to, "brine").unwrap();
+
+    let verdict = apply::validate(
+        &text,
+        &suggestion.original_text,
+        &suggestion.context_hash,
+        suggestion.anchor_from,
+        suggestion.anchor_to,
+    );
+    let apply::Validation::Ready { from, to } = verdict else {
+        panic!("expected the suggestion to be applicable, got {verdict:?}");
+    };
+
+    let before = repositories::pages::get(&conn, page.id).unwrap();
+    repositories::revisions::capture(
+        &conn,
+        page.id,
+        repositories::revisions::RevisionReason::BeforeAi,
+    )
+    .unwrap();
+    let spliced = apply::apply(&before.document, from, to, "brine").unwrap();
+    let saved = repositories::save_page(&conn, page.id, spliced).unwrap();
+
+    assert_eq!(saved.plain_text, "The road had been brine once.");
+
+    // Applying is undoable: the replaced text is in history.
+    let history = repositories::revisions::list(&conn, page.id).unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|r| r.reason == repositories::revisions::RevisionReason::BeforeAi),
+        "no before-AI snapshot was taken"
+    );
+    assert!(history.iter().any(|r| r.preview.contains("salt once")));
+
+    // --- A second suggestion, made stale by an edit, is refused. ---
+    let stale =
+        repositories::ai::create_suggestion(&conn, page.id, None, 18, 23, "seawater").unwrap();
+    assert_eq!(stale.original_text, "brine");
+
+    repositories::save_page(&conn, page.id, document("Something else entirely now.")).unwrap();
+    let current = repositories::pages::get(&conn, page.id).unwrap();
+
+    let verdict = apply::validate(
+        &current.plain_text,
+        &stale.original_text,
+        &stale.context_hash,
+        stale.anchor_from,
+        stale.anchor_to,
+    );
+    assert!(
+        matches!(verdict, apply::Validation::Stale { .. }),
+        "a suggestion whose text is gone must be refused, got {verdict:?}"
+    );
+
+    repositories::ai::set_suggestion_status(&conn, stale.id, SuggestionStatus::Stale).unwrap();
+    assert_eq!(
+        repositories::ai::get_suggestion(&conn, stale.id)
+            .unwrap()
+            .status,
+        SuggestionStatus::Stale
+    );
+    // And the manuscript is untouched by the refusal.
+    assert_eq!(
+        repositories::pages::get(&conn, page.id).unwrap().plain_text,
+        "Something else entirely now."
+    );
+}
+
+#[test]
+fn an_ai_note_and_its_suggestion_are_created_together_or_not_at_all() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(dir.path().join("grimoire.db")).unwrap();
+
+    let (page_id, _) = {
+        let conn = db.get().unwrap();
+        let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+        let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+        let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+        repositories::save_page(&conn, page.id, document("The road had been salt once.")).unwrap();
+        (page.id, volume.id)
+    };
+
+    // A transaction that fails after creating the note must leave neither.
+    let outcome = db.transaction(|tx| {
+        repositories::annotations::create_anchored(
+            tx,
+            page_id,
+            crate::domain::annotation::AnnotationKind::AiSuggestion,
+            "Tightened.",
+            18,
+            22,
+        )?;
+        // An impossible suggestion: no text in the range.
+        repositories::ai::create_suggestion(tx, page_id, None, 5, 5, "x")
+    });
+    assert!(outcome.is_err());
+
+    let conn = db.get().unwrap();
+    assert!(
+        repositories::annotations::list(&conn, page_id)
+            .unwrap()
+            .is_empty(),
+        "the note should have rolled back with the suggestion"
+    );
+    assert!(
+        repositories::ai::suggestions_for_page(&conn, page_id)
+            .unwrap()
+            .is_empty()
+    );
+}

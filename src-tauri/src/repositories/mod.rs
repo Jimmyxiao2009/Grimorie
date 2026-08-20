@@ -5,6 +5,7 @@
 //! that mutate more than one row are expected to wrap the call in
 //! [`crate::database::Database::transaction`].
 
+pub mod ai;
 pub mod annotations;
 pub mod bookmarks;
 pub mod chapters;

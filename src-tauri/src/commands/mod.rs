@@ -8,6 +8,7 @@
 //! Commands are organised by concern rather than piled into one module, so this
 //! stays a designed surface instead of an RPC dump.
 
+pub mod ai;
 pub mod annotations;
 pub mod bookmarks;
 pub mod history;

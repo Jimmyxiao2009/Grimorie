@@ -4,8 +4,10 @@
 //! storage, and AI transport. It does no presentation work. See
 //! `docs/architecture.md` for the boundary this crate is held to.
 
+pub mod ai;
 mod app_state;
 mod commands;
+pub mod credentials;
 mod logging;
 
 // Public so development tools — the seed example, and any future maintenance
@@ -72,7 +74,7 @@ pub fn run() {
                 tracing::error!(error = %err, "could not open the library");
             })?;
             tracing::info!(path = ?db.path(), "library opened");
-            app.manage(AppState::new(db));
+            app.manage(AppState::new(db)?);
 
             Ok(())
         })
@@ -116,6 +118,20 @@ pub fn run() {
             commands::history::drafts_recoverable,
             commands::history::draft_recover,
             commands::history::draft_discard,
+            commands::ai::ai_providers,
+            commands::ai::ai_provider_save,
+            commands::ai::ai_provider_delete,
+            commands::ai::ai_profiles,
+            commands::ai::ai_profile_save,
+            commands::ai::ai_profile_delete,
+            commands::ai::ai_actions,
+            commands::ai::ai_preview,
+            commands::ai::ai_run,
+            commands::ai::ai_cancel,
+            commands::ai::ai_suggestions,
+            commands::ai::ai_suggestion_reevaluate,
+            commands::ai::ai_suggestion_apply,
+            commands::ai::ai_suggestion_dismiss,
             commands::bookmarks::bookmark_toggle,
             commands::bookmarks::bookmarks_list,
             commands::bookmarks::bookmarked_pages,
