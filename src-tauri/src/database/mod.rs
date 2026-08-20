@@ -50,6 +50,7 @@ impl Database {
                 "database schema updated"
             );
         }
+        ensure_search_index(&conn)?;
         drop(conn);
 
         Ok(Self { pool, path })
@@ -75,6 +76,37 @@ impl Database {
         tx.commit()?;
         Ok(value)
     }
+}
+
+/// Builds the search index if the library has content but the index does not.
+///
+/// This covers two cases with one check, and deliberately does not test for a
+/// particular migration version:
+///
+/// * A library that predates search. Adding the table does not fill it, and
+///   without this a writer would upgrade and find that searching their own
+///   manuscript returned nothing until they re-saved every Page.
+/// * An index lost or emptied for any other reason.
+///
+/// The condition is "pages exist and the index is empty", so it cannot loop on
+/// a genuinely empty library and costs two counts at startup otherwise.
+fn ensure_search_index(conn: &rusqlite::Connection) -> Result<()> {
+    let pages: i64 = conn.query_row("SELECT count(*) FROM pages", [], |row| row.get(0))?;
+    if pages == 0 {
+        return Ok(());
+    }
+
+    let indexed: i64 = conn.query_row("SELECT count(*) FROM search_rows", [], |row| row.get(0))?;
+    if indexed > 0 {
+        return Ok(());
+    }
+
+    tracing::info!(
+        pages,
+        "search index is empty; building it from the manuscript"
+    );
+    crate::search::rebuild(conn)?;
+    Ok(())
 }
 
 /// Per-connection pragmas.
