@@ -32,7 +32,9 @@ public class Win {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 }
 '@
 
@@ -57,9 +59,7 @@ if ($Width -gt 0 -and $Height -gt 0) {
 Start-Sleep -Milliseconds $SettleMs
 
 # PW_RENDERFULLCONTENT (2) asks the window to draw itself, which captures the
-# WebView2 surface even when another window is on top. The whole window is
-# saved, title bar included, rather than cropped to the client rect — the frame
-# is a useful sanity check that the right window was captured.
+# WebView2 surface even when another window is on top.
 $wr = New-Object Win+RECT; [void][Win]::GetWindowRect($h, [ref]$wr)
 $bw = $wr.Right - $wr.Left
 $bh = $wr.Bottom - $wr.Top
@@ -87,16 +87,25 @@ if (-not $ok) {
 }
 $gfx.Dispose()
 
-if ($scale -eq 1.0) {
-  $bmp = $raw
-} else {
-  $bmp = New-Object System.Drawing.Bitmap $bw, $bh
-  $sg = [System.Drawing.Graphics]::FromImage($bmp)
-  $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-  $sg.DrawImage($raw, 0, 0, $bw, $bh)
-  $sg.Dispose()
-  $raw.Dispose()
-}
+# Scale back to logical pixels, then crop to the client area so that image
+# coordinates are client coordinates. That equivalence is what lets a position
+# read off a screenshot be clicked directly by drive-window.ps1.
+$cr = New-Object Win+RECT; [void][Win]::GetClientRect($h, [ref]$cr)
+$origin = New-Object Win+POINT; [void][Win]::ClientToScreen($h, [ref]$origin)
+$offsetX = $origin.X - $wr.Left
+$offsetY = $origin.Y - $wr.Top
+
+$bmp = New-Object System.Drawing.Bitmap $cr.Right, $cr.Bottom
+$sg = [System.Drawing.Graphics]::FromImage($bmp)
+$sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$sg.DrawImage(
+  $raw,
+  (New-Object System.Drawing.Rectangle 0, 0, $cr.Right, $cr.Bottom),
+  (New-Object System.Drawing.Rectangle ([int]($offsetX * $scale)), ([int]($offsetY * $scale)),
+    ([int]($cr.Right * $scale)), ([int]($cr.Bottom * $scale))),
+  [System.Drawing.GraphicsUnit]::Pixel)
+$sg.Dispose()
+$raw.Dispose()
 
 $dir = Split-Path -Parent $Out
 if ($dir -and -not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Force -Path $dir) }
@@ -104,5 +113,4 @@ $target = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $Out))
 $bmp.Save($target, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 
-$cr = New-Object Win+RECT; [void][Win]::GetClientRect($h, [ref]$cr)
-Write-Output "captured window ${bw}x${bh} at dpi $dpi (client $($cr.Right)x$($cr.Bottom)) -> $Out"
+Write-Output "captured client $($cr.Right)x$($cr.Bottom) at dpi $dpi -> $Out"
