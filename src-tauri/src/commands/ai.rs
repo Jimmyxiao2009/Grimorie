@@ -357,6 +357,9 @@ pub async fn ai_run(
     Ok(request_id)
 }
 
+// Eight parameters, all of them distinct values this needs and none of them
+// grouping naturally: bundling them into a struct would move the same list one
+// line up without making anything clearer.
 #[allow(clippy::too_many_arguments)]
 async fn stream_into_margin(
     app: &AppHandle,

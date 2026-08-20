@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Library from './routes/Library.svelte';
+  import Settings from './routes/Settings.svelte';
   import Workspace from './routes/Workspace.svelte';
   import Notices from '$lib/components/Notices.svelte';
   import RecoveryPrompt from '$lib/revisions/RecoveryPrompt.svelte';
@@ -55,7 +56,9 @@
     <module.default />
   {/await}
 {:else if ready}
-  {#if route.name === 'workspace'}
+  {#if route.name === 'settings'}
+    <Settings />
+  {:else if route.name === 'workspace'}
     <!-- Keyed on the Volume so opening a different one rebuilds the workspace
          rather than trying to reconcile two manuscripts in place. -->
     {#key route.volumeId}

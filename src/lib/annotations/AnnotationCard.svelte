@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte';
   import Menu from '$lib/components/Menu.svelte';
+  import SuggestionActions from './SuggestionActions.svelte';
+  import { ai } from '$lib/stores/ai.svelte';
   import { relativeTime } from '$lib/utils/format';
   import { KIND_LABELS, KIND_TOKENS, anchorOf, type Annotation } from '$lib/types/annotation';
   import type { IconName } from '$lib/design/icons';
@@ -15,9 +17,14 @@
     ondelete: (annotation: Annotation) => void;
     /** Scrolls the manuscript to the anchored text. */
     onreveal: (annotation: Annotation) => void;
+    /** Called after a suggestion is applied, so the Page can be reloaded. */
+    onapplied?: () => void;
   }
 
-  let { annotation, focused, onfocus, onedit, onresolve, ondelete, onreveal }: Props = $props();
+  let { annotation, focused, onfocus, onedit, onresolve, ondelete, onreveal, onapplied }: Props =
+    $props();
+
+  const suggestion = $derived(ai.suggestionFor(annotation.id));
 
   const anchor = $derived(anchorOf(annotation));
   const resolved = $derived(annotation.status === 'resolved');
@@ -80,6 +87,10 @@
   <button type="button" class="body selectable" onclick={() => onfocus(annotation.id)}>
     {annotation.body}
   </button>
+
+  {#if suggestion}
+    <SuggestionActions {suggestion} onapplied={() => onapplied?.()} />
+  {/if}
 
   {#if annotation.authorProfile}
     <p class="author">{annotation.authorProfile}</p>

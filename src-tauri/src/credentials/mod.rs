@@ -66,7 +66,7 @@ pub fn get(reference: &str) -> Result<String> {
 /// needs, and the most it is allowed to know.
 pub fn exists(reference: &str) -> bool {
     entry(reference)
-        .and_then(|entry| Ok(entry.get_password().is_ok()))
+        .map(|entry| entry.get_password().is_ok())
         .unwrap_or(false)
 }
 

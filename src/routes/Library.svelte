@@ -114,6 +114,7 @@
       </div>
 
       <IconButton name="search" label="Search your library" onclick={() => (searchOpen = true)} />
+      <IconButton name="settings" label="Settings" onclick={() => router.toSettings()} />
       <Button variant="primary" icon="plus" onclick={beginCreate}>New Volume</Button>
     </div>
   </header>

@@ -7,6 +7,8 @@
   import IconButton from '$lib/components/IconButton.svelte';
   import TextField from '$lib/components/TextField.svelte';
   import TagRow from './TagRow.svelte';
+  import AskGrimoire from './AskGrimoire.svelte';
+  import { ai } from '$lib/stores/ai.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import {
     AUTHORABLE_KINDS,
@@ -22,9 +24,13 @@
     onreveal: (annotation: Annotation) => void;
     /** Shown on narrow layouts, where the Margin is an overlay. */
     onclose?: () => void;
+    /** Called after an AI suggestion is applied, so the Page can reload. */
+    onapplied?: () => void;
   }
 
-  let { pageId, selection, onreveal, onclose }: Props = $props();
+  let { pageId, selection, onreveal, onclose, onapplied }: Props = $props();
+
+  let askOpen = $state(false);
 
   let composing = $state(false);
   let composeKind = $state<AnnotationKind>('note');
@@ -113,6 +119,21 @@
   </header>
 
   <div class="notes" data-scroll>
+    {#if ai.isStreaming}
+      <div class="streaming" aria-live="polite">
+        <header class="streaming-head">
+          <Icon name="sparkle" size={14} />
+          <span class="streaming-title">
+            {ai.running?.profileName ?? 'Reading'} · {ai.running?.actionLabel ?? ''}
+          </span>
+          <button type="button" class="stop" onclick={() => ai.cancel()}>Stop</button>
+        </header>
+        <p class="streaming-body selectable">
+          {ai.streamed}{#if ai.streamed === ''}Reading the passage…{/if}
+        </p>
+      </div>
+    {/if}
+
     {#if margin.loading}
       <p class="status">Reading the Margin…</p>
     {:else if margin.visible.length === 0}
@@ -133,6 +154,7 @@
           onresolve={toggleResolved}
           ondelete={beginDelete}
           {onreveal}
+          onapplied={() => onapplied?.()}
         />
       {/each}
     {/if}
@@ -144,8 +166,28 @@
     <Button variant="secondary" size="sm" icon="plus" block disabled={!pageId} onclick={beginNote}>
       {hasSelection ? 'Note on selection' : 'Note on this Page'}
     </Button>
+
+    {#if ai.isConfigured}
+      <Button
+        variant="ghost"
+        size="sm"
+        icon="sparkle"
+        block
+        disabled={!pageId || !hasSelection || ai.isStreaming}
+        onclick={() => (askOpen = true)}
+      >
+        {hasSelection ? 'Ask Grimoire' : 'Select text to ask'}
+      </Button>
+    {/if}
   </footer>
 </section>
+
+<AskGrimoire
+  bind:open={askOpen}
+  {pageId}
+  {selection}
+  oncomplete={() => {}}
+/>
 
 <Dialog
   bind:open={composing}
@@ -255,9 +297,59 @@
   }
 
   .foot {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
     flex: none;
     padding: var(--space-2);
     border-top: var(--border-width) solid var(--border-subtle);
+  }
+
+  /* The answer as it arrives, above the settled notes. It is not a card yet —
+     nothing has been saved — so it is drawn as a dashed provisional block. */
+  .streaming {
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: var(--border-width) dashed var(--state-ai);
+    background: var(--surface-raised);
+  }
+
+  .streaming-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+    color: var(--state-ai);
+  }
+
+  .streaming-title {
+    flex: 1;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stop {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+  }
+
+  .stop:hover {
+    background: var(--surface-hover);
+    color: var(--state-danger);
+  }
+
+  .streaming-body {
+    font-size: var(--text-md);
+    line-height: var(--leading-snug);
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
   }
 
   .form {

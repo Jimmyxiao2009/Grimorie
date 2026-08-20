@@ -24,6 +24,7 @@
   import { viewport } from '$lib/design/viewport.svelte';
   import { activePage } from '$lib/stores/page.svelte';
   import { router } from '$lib/stores/router.svelte';
+  import { ai } from '$lib/stores/ai.svelte';
   import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
@@ -61,7 +62,16 @@
   onMount(() => {
     void workspace.open(volumeId, pageId);
     void bookmarks.loadForVolume(volumeId);
+    void ai.loadConfiguration();
     margin.start();
+
+    // A finished AI run has written a note and possibly a suggestion; both are
+    // re-read rather than assembled from the stream, so the Margin shows what
+    // was actually stored.
+    const stopAi = ai.start(() => {
+      void margin.refresh();
+      void ai.loadSuggestions(workspace.activePageId);
+    });
     autosave.onsaved = (saved) => activePage.adoptSaved(saved);
 
     // A save must not be left waiting on a debounce timer when the writer
@@ -80,6 +90,8 @@
       activePage.clear();
       margin.clear();
       bookmarks.clear();
+      stopAi();
+      ai.clear();
     };
   });
 
@@ -93,6 +105,7 @@
     if (activePage.page?.id === id) return;
     void activePage.load(id);
     void margin.load(id);
+    void ai.loadSuggestions(id);
   });
 
   // Saving re-anchors annotations in the same transaction, so the Margin is
@@ -125,6 +138,21 @@
 
     setHighlightRanges(view, ranges);
   });
+
+  /**
+   * Reloads after a suggestion has been applied.
+   *
+   * The backend rewrote the document, so the editor is rebuilt from the stored
+   * Page rather than patched — the editor is keyed by Page id and a genuinely
+   * new record is what it needs.
+   */
+  async function reloadAfterApply() {
+    const id = workspace.activePageId;
+    if (!id) return;
+    await activePage.load(id);
+    await margin.refresh();
+    await ai.loadSuggestions(id);
+  }
 
   /** Scrolls the manuscript to an annotation's text and selects it. */
   function reveal(annotation: Annotation) {
@@ -238,6 +266,11 @@
         event.preventDefault();
         searchOpen = true;
         break;
+      case ',':
+        event.preventDefault();
+        await autosave.flush();
+        router.toSettings();
+        break;
       case 'b':
         event.preventDefault();
         if (event.shiftKey) bookmarksOpen = true;
@@ -277,6 +310,15 @@
     <div class="rail-right">
       <SaveIndicator />
       <IconButton name="search" label="Search" size="sm" onclick={() => (searchOpen = true)} />
+      <IconButton
+        name="settings"
+        label="Settings"
+        size="sm"
+        onclick={async () => {
+          await autosave.flush();
+          router.toSettings();
+        }}
+      />
       <IconButton
         name="bookmark"
         label={bookmarks.isMarked(workspace.activePageId) ? 'Remove bookmark' : 'Bookmark this Page'}
@@ -369,6 +411,7 @@
           pageId={activePage.page?.id ?? null}
           selection={editorState?.selection ?? null}
           onreveal={reveal}
+          onapplied={reloadAfterApply}
         />
       </aside>
     {/if}

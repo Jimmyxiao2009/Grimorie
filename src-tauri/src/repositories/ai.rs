@@ -48,6 +48,9 @@ fn map_provider(row: &Row<'_>) -> rusqlite::Result<AiProviderConfig> {
     })
 }
 
+// A provider's settings are eight independent values with no natural grouping.
+// A struct here would move the same list one line up without clarifying it.
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_provider(
     conn: &Connection,
     id: Option<AiProviderId>,
