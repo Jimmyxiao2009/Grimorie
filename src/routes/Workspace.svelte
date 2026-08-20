@@ -1,0 +1,483 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import type { Editor } from '@tiptap/core';
+
+  import Button from '$lib/components/Button.svelte';
+  import Dialog from '$lib/components/Dialog.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import IconButton from '$lib/components/IconButton.svelte';
+  import TextField from '$lib/components/TextField.svelte';
+
+  import ManuscriptTree from '$lib/manuscript/ManuscriptTree.svelte';
+  import FormatBar from '$lib/editor/FormatBar.svelte';
+  import PageEditor, { type EditorState } from '$lib/editor/PageEditor.svelte';
+  import SaveIndicator from '$lib/editor/SaveIndicator.svelte';
+  import { autosave } from '$lib/editor/autosave.svelte';
+
+  import { viewport } from '$lib/design/viewport.svelte';
+  import { activePage } from '$lib/stores/page.svelte';
+  import { router } from '$lib/stores/router.svelte';
+  import { workspace } from '$lib/stores/workspace.svelte';
+  import { settingsStore } from '$lib/stores/settings.svelte';
+  import { count } from '$lib/utils/format';
+
+  interface Props {
+    volumeId: string;
+    pageId: string | null;
+  }
+
+  let { volumeId, pageId }: Props = $props();
+
+  let editor = $state<Editor | null>(null);
+  let editorState = $state<EditorState | null>(null);
+  let navOpen = $state(false);
+
+  type Target = { kind: 'chapter' | 'page'; id: string; title: string };
+  let renameOpen = $state(false);
+  let renameTarget = $state<Target | null>(null);
+  let renameTitle = $state('');
+
+  let deleteOpen = $state(false);
+  let deleteTarget = $state<Target | null>(null);
+
+  let linkOpen = $state(false);
+  let linkUrl = $state('');
+
+  onMount(() => {
+    void workspace.open(volumeId, pageId);
+    autosave.onsaved = (saved) => activePage.adoptSaved(saved);
+
+    // A save must not be left waiting on a debounce timer when the writer
+    // switches away from the window, closes the lid, or shuts down.
+    const flush = () => void autosave.flush();
+    window.addEventListener('blur', flush);
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('beforeunload', flush);
+
+    return () => {
+      window.removeEventListener('blur', flush);
+      document.removeEventListener('visibilitychange', flush);
+      window.removeEventListener('beforeunload', flush);
+      autosave.onsaved = undefined;
+      workspace.close();
+      activePage.clear();
+    };
+  });
+
+  // Load whichever Page the tree has selected.
+  $effect(() => {
+    const id = workspace.activePageId;
+    if (!id) {
+      activePage.clear();
+      return;
+    }
+    if (activePage.page?.id === id) return;
+    void activePage.load(id);
+  });
+
+  // Keep the editor's debounce in step with the setting.
+  $effect(() => {
+    autosave.setDebounce(settingsStore.settings.autosaveDebounceMs);
+  });
+
+  const chapterOf = $derived(
+    workspace.chapters.find((chapter) =>
+      chapter.pages.some((page) => page.id === workspace.activePageId)
+    ) ?? null
+  );
+
+  const showNavPane = $derived(viewport.navIsPane);
+
+  async function leave() {
+    await autosave.flush();
+    router.toLibrary();
+  }
+
+  function beginRename(target: Target) {
+    renameTarget = target;
+    renameTitle = target.title;
+    renameOpen = true;
+  }
+
+  async function confirmRename() {
+    const target = renameTarget;
+    const title = renameTitle.trim();
+    if (!target || !title) return;
+    renameOpen = false;
+    if (target.kind === 'chapter') await workspace.renameChapter(target.id, title);
+    else await workspace.renamePage(target.id, title);
+  }
+
+  function beginDelete(target: Target) {
+    deleteTarget = target;
+    deleteOpen = true;
+  }
+
+  async function confirmDelete() {
+    const target = deleteTarget;
+    if (!target) return;
+    deleteOpen = false;
+    if (target.kind === 'chapter') await workspace.deleteChapter(target.id);
+    else await workspace.deletePage(target.id);
+  }
+
+  function openLinkDialog() {
+    linkUrl = (editor?.getAttributes('link')['href'] as string | undefined) ?? '';
+    linkOpen = true;
+  }
+
+  function applyLink() {
+    const url = linkUrl.trim();
+    linkOpen = false;
+    if (!editor) return;
+    if (!url) {
+      editor.chain().focus().unsetLink().run();
+      return;
+    }
+    // Bare domains are what people actually type; without a scheme the browser
+    // would treat the href as a relative path.
+    const href = /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
+    editor.chain().focus().extendMarkRange('link').setLink({ href }).run();
+  }
+
+  async function onKeydown(event: KeyboardEvent) {
+    const mod = event.ctrlKey || event.metaKey;
+    if (!mod) {
+      if (event.key === 'Escape' && navOpen) {
+        event.preventDefault();
+        navOpen = false;
+      }
+      return;
+    }
+
+    switch (event.key.toLowerCase()) {
+      case 's':
+        event.preventDefault();
+        await autosave.flush();
+        break;
+      case 'n':
+        event.preventDefault();
+        if (event.shiftKey) await workspace.createChapter();
+        else if (chapterOf) await workspace.createPage(chapterOf.id);
+        else if (workspace.chapters[0]) await workspace.createPage(workspace.chapters[0].id);
+        break;
+    }
+  }
+</script>
+
+<svelte:window onkeydown={onKeydown} />
+
+<div class="workspace" data-layout={viewport.layout}>
+  <header class="rail">
+    <div class="rail-left">
+      {#if !showNavPane}
+        <IconButton name="menu" label="Show manuscript" size="sm" onclick={() => (navOpen = true)} />
+      {/if}
+      <IconButton name="arrowLeft" label="Back to Library" size="sm" onclick={leave} />
+
+      <nav class="breadcrumb" aria-label="Location">
+        <button type="button" class="crumb volume truncate" onclick={leave}>
+          {workspace.volume?.title ?? 'Loading…'}
+        </button>
+        {#if chapterOf}
+          <Icon name="chevronRight" size={13} />
+          <span class="crumb truncate">{chapterOf.title}</span>
+        {/if}
+      </nav>
+    </div>
+
+    {#if !viewport.isNarrow}
+      <div class="rail-format">
+        <FormatBar {editor} state={editorState} onlink={openLinkDialog} />
+      </div>
+    {/if}
+
+    <div class="rail-right">
+      <SaveIndicator />
+    </div>
+  </header>
+
+  <div class="body">
+    {#if showNavPane}
+      <aside class="pane nav">
+        <ManuscriptTree onrename={beginRename} ondelete={beginDelete} />
+      </aside>
+    {/if}
+
+    <main class="editor" data-scroll aria-label="Manuscript">
+      {#if workspace.failure}
+        <EmptyState title={workspace.failure} hint="Your manuscripts have not been changed.">
+          {#snippet action()}
+            <Button variant="secondary" onclick={() => router.toLibrary()}>Back to Library</Button>
+          {/snippet}
+        </EmptyState>
+      {:else if workspace.loading}
+        <p class="status">Opening…</p>
+      {:else if workspace.isEmpty}
+        <EmptyState
+          title="This Volume has no Chapters."
+          hint="A Chapter gives the manuscript its structure. Pages go inside it."
+        >
+          {#snippet action()}
+            <Button variant="primary" icon="plus" onclick={() => void workspace.createChapter()}>
+              New Chapter
+            </Button>
+          {/snippet}
+        </EmptyState>
+      {:else if activePage.failure}
+        <EmptyState title={activePage.failure} />
+      {:else if !workspace.activePageId}
+        <EmptyState
+          title="No Page is open."
+          hint="Choose a Page from the manuscript, or add one to a Chapter."
+        />
+      {:else if activePage.page}
+        <!-- Keyed on the Page id: opening a different Page builds a fresh
+             editor, which is what keeps undo history from crossing Pages. -->
+        {#key activePage.page.id}
+          <PageEditor
+            page={activePage.page}
+            spellcheck={settingsStore.settings.spellcheck}
+            onready={(instance) => (editor = instance)}
+            onstate={(state) => (editorState = state)}
+          />
+        {/key}
+      {:else}
+        <p class="status">Opening Page…</p>
+      {/if}
+    </main>
+  </div>
+
+  {#if viewport.isNarrow}
+    <div class="bottom">
+      <FormatBar {editor} state={editorState} onlink={openLinkDialog} />
+      <span class="tally tabular">{count(activePage.words)} words</span>
+    </div>
+  {/if}
+</div>
+
+<!-- The manuscript as an overlay, for widths where it cannot be a pane. -->
+{#if !showNavPane && navOpen}
+  <div
+    class="scrim"
+    role="presentation"
+    onpointerdown={() => (navOpen = false)}
+  ></div>
+  <aside class="pane overlay" aria-label="Manuscript">
+    <header class="overlay-head">
+      <span class="overlay-title truncate">{workspace.volume?.title ?? ''}</span>
+      <IconButton name="close" label="Close manuscript" size="sm" onclick={() => (navOpen = false)} />
+    </header>
+    <ManuscriptTree
+      onrename={beginRename}
+      ondelete={beginDelete}
+      onnavigate={() => (navOpen = false)}
+    />
+  </aside>
+{/if}
+
+<Dialog
+  bind:open={renameOpen}
+  title={renameTarget?.kind === 'chapter' ? 'Rename Chapter' : 'Rename Page'}
+>
+  <TextField bind:value={renameTitle} label="Title" autofocus onenter={confirmRename} />
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (renameOpen = false)}>Cancel</Button>
+    <Button variant="primary" disabled={!renameTitle.trim()} onclick={confirmRename}>Save</Button>
+  {/snippet}
+</Dialog>
+
+<Dialog
+  bind:open={deleteOpen}
+  title={deleteTarget ? `Delete “${deleteTarget.title}”?` : 'Delete?'}
+  description={deleteTarget?.kind === 'chapter'
+    ? 'The Chapter and every Page inside it will be deleted. This cannot be undone.'
+    : 'This Page will be deleted. This cannot be undone.'}
+>
+  <p class="warning">Nothing else in the Volume is affected.</p>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (deleteOpen = false)}>Cancel</Button>
+    <Button variant="danger" onclick={confirmDelete}>Delete</Button>
+  {/snippet}
+</Dialog>
+
+<Dialog bind:open={linkOpen} title="Link" description="Leave the field empty to remove the link.">
+  <TextField
+    bind:value={linkUrl}
+    label="Address"
+    placeholder="example.com"
+    autofocus
+    onenter={applyLink}
+  />
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (linkOpen = false)}>Cancel</Button>
+    <Button variant="primary" onclick={applyLink}>Apply</Button>
+  {/snippet}
+</Dialog>
+
+<style>
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--surface-app);
+  }
+
+  .rail {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+    min-height: var(--rail-height);
+    padding: 0 var(--space-2);
+    background: var(--surface-pane);
+    border-bottom: var(--border-width) solid var(--border-subtle);
+  }
+
+  .rail-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    flex: 1;
+  }
+
+  .rail-format {
+    flex: none;
+    min-width: 0;
+  }
+
+  .rail-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex: 1;
+  }
+
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    color: var(--text-tertiary);
+    padding-left: var(--space-1);
+  }
+
+  .crumb {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    min-width: 0;
+    padding: var(--space-1) var(--space-1);
+    border-radius: var(--radius-sm);
+  }
+
+  .crumb.volume {
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+  }
+
+  .crumb.volume:hover {
+    background: var(--surface-hover);
+  }
+
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .pane {
+    flex: none;
+    width: var(--pane-nav);
+    min-width: 0;
+    background: var(--surface-pane);
+    border-right: var(--border-width) solid var(--border-subtle);
+  }
+
+  .editor {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    background: var(--surface-page);
+  }
+
+  .status {
+    padding: var(--space-8) var(--space-4);
+    text-align: center;
+    color: var(--text-tertiary);
+  }
+
+  .warning {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+  }
+
+  /* On a narrow screen the formatting controls move to the bottom, where a
+     thumb already is, rather than staying at the top out of reach. */
+  .bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+    padding: var(--space-1) var(--space-2) max(var(--space-1), env(safe-area-inset-bottom));
+    background: var(--surface-pane);
+    border-top: var(--border-width) solid var(--border-subtle);
+  }
+
+  .tally {
+    margin-left: auto;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    padding-right: var(--space-1);
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-scrim);
+    background: rgb(0 0 0 / 34%);
+    animation: fade var(--motion-fast) var(--ease-out);
+  }
+
+  .overlay {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: var(--z-pane);
+    display: flex;
+    flex-direction: column;
+    width: min(20rem, 86vw);
+    border-right: var(--border-width) solid var(--border-default);
+    box-shadow: var(--shadow-overlay);
+    animation: slide-in var(--motion-base) var(--ease-out);
+  }
+
+  .overlay-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+    min-height: var(--rail-height);
+    padding: 0 var(--space-2) 0 var(--space-3);
+    border-bottom: var(--border-width) solid var(--border-subtle);
+  }
+
+  .overlay-title {
+    flex: 1;
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+  }
+
+  @keyframes slide-in {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+</style>
