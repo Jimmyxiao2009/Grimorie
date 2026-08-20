@@ -58,9 +58,11 @@ mod tests {
         let db = TempDatabase::open();
         let conn = db.get().unwrap();
 
-        let mut settings = AppSettings::default();
-        settings.theme = "night".into();
-        settings.manuscript_measure = 42.0;
+        let settings = AppSettings {
+            theme: "night".into(),
+            manuscript_measure: 42.0,
+            ..Default::default()
+        };
         save(&conn, &settings).unwrap();
 
         let loaded = load(&conn).unwrap();
