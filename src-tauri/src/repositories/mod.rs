@@ -5,6 +5,7 @@
 //! that mutate more than one row are expected to wrap the call in
 //! [`crate::database::Database::transaction`].
 
+pub mod annotations;
 pub mod chapters;
 pub mod drafts;
 pub mod pages;
@@ -27,6 +28,8 @@ use crate::error::Result;
 /// 2. The write itself.
 /// 3. Clearing the crash-recovery draft, because a committed Page has nothing
 ///    left to recover.
+/// 4. Re-placing every annotation against the new text, so the Margin can never
+///    be observed pointing at a version of the Page that no longer exists.
 ///
 /// The checkpoint interval comes from settings rather than a constant, so a
 /// writer who wants a denser history can have one.
@@ -42,6 +45,7 @@ pub fn save_page(conn: &Connection, page_id: PageId, document: serde_json::Value
 
     let saved = pages::save_document(conn, page_id, document)?;
     drafts::clear(conn, page_id)?;
+    annotations::reanchor_page(conn, page_id)?;
     Ok(saved)
 }
 
