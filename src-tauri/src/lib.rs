@@ -101,6 +101,13 @@ pub fn run() {
             commands::manuscript::page_delete,
             commands::manuscript::page_reorder,
             commands::manuscript::page_move,
+            commands::history::revisions_list,
+            commands::history::revision_get,
+            commands::history::revision_restore,
+            commands::history::draft_write,
+            commands::history::drafts_recoverable,
+            commands::history::draft_recover,
+            commands::history::draft_discard,
             commands::settings::settings_get,
             commands::settings::settings_save,
         ])

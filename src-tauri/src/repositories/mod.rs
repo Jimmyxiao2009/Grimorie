@@ -6,13 +6,44 @@
 //! [`crate::database::Database::transaction`].
 
 pub mod chapters;
+pub mod drafts;
 pub mod pages;
+pub mod revisions;
 pub mod settings;
 pub mod volumes;
 
 use rusqlite::Connection;
 
+use crate::domain::{Page, PageId};
 use crate::error::Result;
+
+/// Saves a Page and does the bookkeeping that must happen with it.
+///
+/// Three things belong in one transaction, and this is the only place that
+/// knows they belong together:
+///
+/// 1. A checkpoint revision, if enough time has passed since the last one.
+///    Taken *before* the write, so it captures what is being replaced.
+/// 2. The write itself.
+/// 3. Clearing the crash-recovery draft, because a committed Page has nothing
+///    left to recover.
+///
+/// The checkpoint interval comes from settings rather than a constant, so a
+/// writer who wants a denser history can have one.
+pub fn save_page(conn: &Connection, page_id: PageId, document: serde_json::Value) -> Result<Page> {
+    let interval = settings::load(conn)?.revision_interval_seconds;
+
+    // Only worth a snapshot once the Page has something in it — the empty
+    // state a Page is created in is not a draft anyone wants back.
+    let existing = pages::get(conn, page_id)?;
+    if !existing.plain_text.is_empty() && revisions::should_checkpoint(conn, page_id, interval)? {
+        revisions::capture(conn, page_id, revisions::RevisionReason::Checkpoint)?;
+    }
+
+    let saved = pages::save_document(conn, page_id, document)?;
+    drafts::clear(conn, page_id)?;
+    Ok(saved)
+}
 
 /// Rewrites a sibling group's positions to 0..n-1 in their current order.
 ///

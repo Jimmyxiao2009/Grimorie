@@ -102,7 +102,8 @@ pub async fn page_summaries(
 ///
 /// Takes only the document: every derived value is recomputed from it in the
 /// same transaction, so there is no parameter that could store a word count
-/// disagreeing with the text it describes.
+/// disagreeing with the text it describes. The same transaction takes a
+/// checkpoint revision when one is due and clears the recovery draft.
 #[tauri::command]
 pub async fn page_save(state: State<'_, AppState>, id: String, document: Value) -> Result<Page> {
     let id = parse_page_id(&id)?;

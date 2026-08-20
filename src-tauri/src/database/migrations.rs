@@ -26,11 +26,23 @@ pub struct Migration {
 /// Every migration Grimoire has ever shipped, in order.
 ///
 /// Append only. Never edit an entry that has been released.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "manuscript",
-    sql: include_str!("../../migrations/001_manuscript.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "manuscript",
+        sql: include_str!("../../migrations/001_manuscript.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "revisions",
+        sql: include_str!("../../migrations/002_revisions.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "drafts",
+        sql: include_str!("../../migrations/003_drafts.sql"),
+    },
+];
 
 #[derive(Debug, Default, PartialEq)]
 pub struct MigrationReport {
