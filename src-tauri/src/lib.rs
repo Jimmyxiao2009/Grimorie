@@ -4,9 +4,11 @@
 //! storage, and AI transport. It does no presentation work. See
 //! `docs/architecture.md` for the boundary this crate is held to.
 
+mod database;
 mod domain;
 mod error;
 mod logging;
+mod repositories;
 
 use tauri::{Manager, Window};
 
