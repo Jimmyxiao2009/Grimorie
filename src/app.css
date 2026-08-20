@@ -1,62 +1,7 @@
-/* Baseline reset. The design system layers on top of this in src/lib/design. */
+/* The single stylesheet entry point. Order matters: tokens must be defined
+   before anything consumes them, and the reset must land before base styles. */
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-* {
-  margin: 0;
-}
-
-html,
-body {
-  height: 100%;
-}
-
-body {
-  font-family: system-ui, sans-serif;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-#grimoire {
-  height: 100%;
-  isolation: isolate;
-}
-
-img,
-picture,
-svg,
-canvas {
-  display: block;
-  max-width: 100%;
-}
-
-input,
-button,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
-}
-
-button {
-  background: none;
-  border: none;
-}
-
-/* The app is not a document; it manages its own scroll containers. */
-body {
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-
-/* Text is selectable in the manuscript; chrome is not, so a stray drag on a
-   toolbar does not paint a selection across the UI. */
-body {
-  -webkit-user-select: none;
-  user-select: none;
-}
+@import './lib/design/reset.css';
+@import './lib/design/tokens.css';
+@import './lib/design/typography.css';
+@import './lib/design/base.css';

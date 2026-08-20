@@ -1,0 +1,99 @@
+/* Reset. Only what earns its place — this is not a normalize dump. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+/* Grimoire is an application, not a document: it owns its scroll containers,
+   and the viewport itself never scrolls or rubber-bands. */
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#grimoire {
+  height: 100%;
+  isolation: isolate;
+}
+
+img,
+picture,
+svg,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+svg {
+  flex: none;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+button {
+  cursor: pointer;
+  text-align: inherit;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+ul,
+ol {
+  list-style: none;
+  padding: 0;
+}
+
+a {
+  color: inherit;
+}
+
+/* Interface chrome is not selectable, so dragging across a toolbar does not
+   paint a selection over the UI. Anything that is genuinely text — the
+   manuscript, annotation bodies, search snippets — opts back in via
+   `.selectable`, and the editor sets it on itself. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.selectable,
+[contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Touch behaviour: no double-tap zoom, no 300ms delay, no tap highlight
+   rectangle — the app draws its own pressed states. */
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Scrollable regions keep default touch panning. */
+[data-scroll] {
+  touch-action: pan-y;
+}

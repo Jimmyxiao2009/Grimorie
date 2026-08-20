@@ -1,0 +1,74 @@
+/*
+ * Typography.
+ *
+ * No web fonts are bundled. The target is Windows, where the system already
+ * ships faces that are better on screen than anything shipped over the wire:
+ * Segoe UI Variable for interface, Constantia for reading, Cascadia for code.
+ * That means no layout shift, no download, no licence surface, and text that
+ * matches the rest of the user's desktop. Stacks fall back sensibly elsewhere.
+ *
+ * The manuscript's own type is user-configurable. Those four properties are
+ * declared here as tokens and written at runtime by the settings store; nothing
+ * else in the app may set them.
+ */
+
+:root {
+  --font-ui:
+    'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --font-ui-display:
+    'Segoe UI Variable Display', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+
+  /* The three manuscript faces the user chooses between. */
+  --font-serif: Constantia, 'Iowan Old Style', Georgia, 'Nimbus Roman', 'Songti SC', serif;
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'SF Mono', 'Liberation Mono', monospace;
+
+  /* Manuscript settings. Defaults; overwritten by the settings store. */
+  --font-manuscript: var(--font-serif);
+  --manuscript-size: 1.125rem;
+  --manuscript-leading: 1.7;
+  --manuscript-paragraph-gap: 0.85em;
+
+  /* Real small caps and proportional figures where the face supports them. */
+  --numeric-tabular: tabular-nums;
+}
+
+html {
+  font-family: var(--font-ui);
+  font-size: 100%; /* respect the OS text-scaling setting */
+}
+
+body {
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  color: var(--text-primary);
+  background: var(--surface-app);
+  font-synthesis-weight: none;
+}
+
+/* Headings in the interface use the display cut, which is fitted for larger
+   sizes; text-cut faces look loose above ~20px. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-ui-display);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.011em;
+}
+
+/* Numerals that must line up in columns — word counts, dates, statistics. */
+.tabular {
+  font-variant-numeric: var(--numeric-tabular);
+}
+
+/* A quiet uppercase label, used for pane headers and section dividers. Tracked
+   out because uppercase set solid is hard to read. */
+.eyebrow {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}

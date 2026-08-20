@@ -1,0 +1,283 @@
+/*
+ * Grimoire design tokens.
+ *
+ * Two layers, and components may only use the second:
+ *
+ *   Primitive   raw scales — space, radius, motion, z-index. Theme-independent.
+ *   Semantic    what a thing *is* — surface-pane, text-secondary, border-focus.
+ *
+ * A component that reaches for a raw hex value or a magic pixel number is a bug.
+ * If a component needs something the semantic layer does not express, the
+ * semantic layer is missing a token; add it here rather than inlining a value.
+ *
+ * The palette is warm throughout. Grimoire is ink on paper, not glass on chrome.
+ */
+
+:root {
+  /* ---- Space -------------------------------------------------------------
+     4px base. Values stay in rem so the whole UI honours OS text scaling. */
+  --space-px: 1px;
+  --space-1: 0.25rem; /*  4 */
+  --space-2: 0.5rem; /*  8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.5rem; /* 24 */
+  --space-6: 2rem; /* 32 */
+  --space-7: 3rem; /* 48 */
+  --space-8: 4rem; /* 64 */
+
+  /* ---- Radius ------------------------------------------------------------
+     Deliberately tight. Large radii read as consumer SaaS, not manuscript. */
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 9px;
+  --radius-pill: 999px;
+
+  /* ---- Touch -------------------------------------------------------------
+     Every interactive control must meet --touch-min in its smallest dimension.
+     Controls in the primary reach zone of a tablet use --touch-comfortable. */
+  --touch-min: 40px;
+  --touch-comfortable: 44px;
+
+  /* ---- Layout ------------------------------------------------------------ */
+  --pane-nav: 17.5rem; /* manuscript navigation */
+  --pane-nav-min: 13rem;
+  --pane-nav-max: 26rem;
+  --pane-margin: 20rem; /* the Margin */
+  --pane-margin-min: 15rem;
+  --pane-margin-max: 30rem;
+
+  /* Manuscript measure. User-configurable; this is the default and it is a
+     line length, not a percentage, so a 4K display does not produce 300-
+     character lines. */
+  --measure-editor: 36rem;
+  --rail-height: 44px;
+
+  /* ---- Z-index -----------------------------------------------------------
+     Named, ordered, and exhaustive. No component invents its own. */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-scrim: 100;
+  --z-pane: 110;
+  --z-menu: 200;
+  --z-dialog: 300;
+  --z-palette: 400;
+  --z-toast: 500;
+
+  /* ---- Motion ------------------------------------------------------------
+     Short and few. Overridden to ~0 under prefers-reduced-motion below. */
+  --motion-instant: 90ms;
+  --motion-fast: 140ms;
+  --motion-base: 200ms;
+  --motion-slow: 280ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ---- Borders ----------------------------------------------------------- */
+  --border-width: 1px;
+  --border-width-strong: 2px;
+
+  /* ---- Type scale --------------------------------------------------------
+     UI type only. Manuscript type is set separately and is user-configurable. */
+  --text-2xs: 0.6875rem; /* 11 */
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-md: 0.875rem; /* 14 — UI default */
+  --text-lg: 1rem; /* 16 */
+  --text-xl: 1.25rem; /* 20 */
+  --text-2xl: 1.625rem; /* 26 */
+  --text-3xl: 2.125rem; /* 34 */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.55;
+}
+
+/* =========================================================================
+   Themes
+   =========================================================================
+
+   Each theme sets the same semantic contract. `data-theme` is written to
+   <html> by the theme store; "system" is resolved to a concrete theme there
+   rather than being a third state here, so components never see it.        */
+
+[data-theme='paper'] {
+  color-scheme: light;
+
+  --surface-app: #e6ded0;
+  --surface-page: #f8f3e9;
+  --surface-pane: #efe8da;
+  --surface-raised: #fcf8f0;
+  --surface-sunken: #ded5c4;
+  --surface-hover: rgb(38 33 26 / 6%);
+  --surface-active: rgb(38 33 26 / 10%);
+  --surface-selected: rgb(156 59 35 / 10%);
+
+  --text-primary: #26211a;
+  --text-secondary: #5e5548;
+  --text-tertiary: #8b8173;
+  --text-inverse: #f8f3e9;
+
+  --border-subtle: rgb(38 33 26 / 9%);
+  --border-default: rgb(38 33 26 / 16%);
+  --border-strong: rgb(38 33 26 / 30%);
+
+  --accent: #9c3b23;
+  --accent-hover: #85311c;
+  --accent-quiet: rgb(156 59 35 / 12%);
+  --accent-contrast: #fdf8f1;
+
+  --state-info: #3c5d78;
+  --state-success: #4a6b3f;
+  --state-warning: #8a6318;
+  --state-danger: #9a3320;
+  --state-ai: #4c4a7a;
+
+  --shadow-raised: 0 1px 2px rgb(38 33 26 / 8%), 0 4px 12px rgb(38 33 26 / 8%);
+  --shadow-overlay: 0 2px 6px rgb(38 33 26 / 10%), 0 16px 40px rgb(38 33 26 / 16%);
+  --page-edge: 0 1px 2px rgb(38 33 26 / 6%), 0 8px 28px rgb(38 33 26 / 7%);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --surface-app: #e8e6e1;
+  --surface-page: #fdfcfa;
+  --surface-pane: #f4f2ee;
+  --surface-raised: #ffffff;
+  --surface-sunken: #dedbd4;
+  --surface-hover: rgb(28 27 25 / 6%);
+  --surface-active: rgb(28 27 25 / 10%);
+  --surface-selected: rgb(160 60 34 / 9%);
+
+  --text-primary: #1c1b19;
+  --text-secondary: #56534d;
+  --text-tertiary: #83807a;
+  --text-inverse: #fdfcfa;
+
+  --border-subtle: rgb(28 27 25 / 8%);
+  --border-default: rgb(28 27 25 / 15%);
+  --border-strong: rgb(28 27 25 / 28%);
+
+  --accent: #a03c22;
+  --accent-hover: #87301a;
+  --accent-quiet: rgb(160 60 34 / 11%);
+  --accent-contrast: #fffdfa;
+
+  --state-info: #35576f;
+  --state-success: #44643a;
+  --state-warning: #825d16;
+  --state-danger: #9c3520;
+  --state-ai: #4a4877;
+
+  --shadow-raised: 0 1px 2px rgb(20 19 17 / 8%), 0 4px 12px rgb(20 19 17 / 7%);
+  --shadow-overlay: 0 2px 6px rgb(20 19 17 / 10%), 0 16px 40px rgb(20 19 17 / 14%);
+  --page-edge: 0 1px 2px rgb(20 19 17 / 5%), 0 8px 28px rgb(20 19 17 / 6%);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface-app: #121110;
+  --surface-page: #1d1a17;
+  --surface-pane: #191715;
+  --surface-raised: #262220;
+  --surface-sunken: #0e0d0c;
+  --surface-hover: rgb(231 224 212 / 7%);
+  --surface-active: rgb(231 224 212 / 12%);
+  --surface-selected: rgb(210 121 90 / 14%);
+
+  --text-primary: #e7e0d4;
+  --text-secondary: #a8a093;
+  --text-tertiary: #7b7369;
+  --text-inverse: #17140f;
+
+  --border-subtle: rgb(231 224 212 / 9%);
+  --border-default: rgb(231 224 212 / 15%);
+  --border-strong: rgb(231 224 212 / 28%);
+
+  --accent: #d2795a;
+  --accent-hover: #e08b6c;
+  --accent-quiet: rgb(210 121 90 / 16%);
+  --accent-contrast: #1b1512;
+
+  --state-info: #7fa6c4;
+  --state-success: #8fb07e;
+  --state-warning: #d0a25c;
+  --state-danger: #d97a63;
+  --state-ai: #9a97d4;
+
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 34%);
+  --shadow-overlay: 0 2px 8px rgb(0 0 0 / 46%), 0 18px 44px rgb(0 0 0 / 50%);
+  --page-edge: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 30px rgb(0 0 0 / 28%);
+}
+
+/* Night is Dark taken further down: less contrast, warmer text, quieter edges.
+   It is for hours at a time in a dim room, not for a bright office. */
+[data-theme='night'] {
+  color-scheme: dark;
+
+  --surface-app: #0b0a09;
+  --surface-page: #141210;
+  --surface-pane: #100f0e;
+  --surface-raised: #1c1917;
+  --surface-sunken: #070706;
+  --surface-hover: rgb(207 197 180 / 6%);
+  --surface-active: rgb(207 197 180 / 10%);
+  --surface-selected: rgb(196 121 94 / 12%);
+
+  --text-primary: #cbc1b0;
+  --text-secondary: #8d8577;
+  --text-tertiary: #6a635a;
+  --text-inverse: #100f0e;
+
+  --border-subtle: rgb(207 197 180 / 7%);
+  --border-default: rgb(207 197 180 / 12%);
+  --border-strong: rgb(207 197 180 / 24%);
+
+  --accent: #c4795e;
+  --accent-hover: #d18a6e;
+  --accent-quiet: rgb(196 121 94 / 14%);
+  --accent-contrast: #14100e;
+
+  --state-info: #7096b2;
+  --state-success: #7f9e70;
+  --state-warning: #bd9253;
+  --state-danger: #c66f59;
+  --state-ai: #8a87bf;
+
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 46%), 0 4px 14px rgb(0 0 0 / 38%);
+  --shadow-overlay: 0 2px 8px rgb(0 0 0 / 52%), 0 18px 44px rgb(0 0 0 / 56%);
+  --page-edge: 0 1px 2px rgb(0 0 0 / 34%), 0 10px 30px rgb(0 0 0 / 30%);
+}
+
+/* =========================================================================
+   Accessibility overrides
+   ========================================================================= */
+
+/* Windows high-contrast mode. Defer to the user's colours rather than fighting
+   them: borders become system-coloured and decorative depth is dropped. */
+@media (forced-colors: active) {
+  :root {
+    --border-subtle: CanvasText;
+    --border-default: CanvasText;
+    --border-strong: CanvasText;
+    --shadow-raised: none;
+    --shadow-overlay: none;
+    --page-edge: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 1ms;
+    --motion-fast: 1ms;
+    --motion-base: 1ms;
+    --motion-slow: 1ms;
+  }
+}

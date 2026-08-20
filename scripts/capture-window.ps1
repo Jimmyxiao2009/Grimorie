@@ -1,12 +1,11 @@
 # Captures a window to a PNG, for visual verification during development.
 #
-# Caveat, measured rather than assumed: on a DPI-scaled display the WebView2
-# surface returned by PrintWindow is positioned as though the viewport were
-# scale-factor larger, so the content sits off-centre in the resulting image by
-# a proportional amount. That is fine for "does this render, does this work"
-# checks, which is what this script is for. It is NOT a reliable way to measure
-# responsive layout — use a real browser viewport at exact CSS pixel sizes for
-# that, since CSS pixels are what the breakpoints actually respond to.
+# -Width/-Height set the *client* size, which is what the app lays out in, so
+# the responsive states can be checked at their real dimensions.
+#
+# Note that on this machine one client pixel is one CSS pixel: WebView2 reports
+# window.innerWidth in the same units as the client rect. The window's backing
+# store is still DPI-scaled, which is handled below.
 #
 #   powershell -NoProfile -File scripts/capture-window.ps1 -Out shot.png
 #   powershell -NoProfile -File scripts/capture-window.ps1 -Out shot.png -Width 1024 -Height 768
@@ -32,6 +31,7 @@ public class Win {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 }
 '@
@@ -58,24 +58,45 @@ Start-Sleep -Milliseconds $SettleMs
 
 # PW_RENDERFULLCONTENT (2) asks the window to draw itself, which captures the
 # WebView2 surface even when another window is on top. The whole window is
-# saved, frame included: cropping to the client rect was tried and misaligned,
-# because the offsets GetWindowRect reports do not match where PrintWindow
-# places the content.
+# saved, title bar included, rather than cropped to the client rect — the frame
+# is a useful sanity check that the right window was captured.
 $wr = New-Object Win+RECT; [void][Win]::GetWindowRect($h, [ref]$wr)
 $bw = $wr.Right - $wr.Left
 $bh = $wr.Bottom - $wr.Top
 if ($bw -le 0 -or $bh -le 0) { Write-Error 'Window has no drawable area.'; exit 1 }
 
-$bmp = New-Object System.Drawing.Bitmap $bw, $bh
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+# PrintWindow draws into the window's *backing store*, which on a scaled display
+# is devicePixelRatio times larger than the logical window rect. Sizing the
+# bitmap to the logical rect therefore captures only the top-left fraction of
+# the content — measured, not guessed. The bitmap is allocated at physical size
+# and the result is scaled back down.
+$dpi = [Win]::GetDpiForWindow($h)
+if ($dpi -le 0) { $dpi = 96 }
+$scale = $dpi / 96.0
+$pw = [int][Math]::Round($bw * $scale)
+$ph = [int][Math]::Round($bh * $scale)
+
+$raw = New-Object System.Drawing.Bitmap $pw, $ph
+$gfx = [System.Drawing.Graphics]::FromImage($raw)
 $hdc = $gfx.GetHdc()
 $ok = [Win]::PrintWindow($h, $hdc, 2)
 $gfx.ReleaseHdc($hdc)
 if (-not $ok) {
   # Fall back to a screen grab; this requires the window to be unobscured.
-  $gfx.CopyFromScreen($wr.Left, $wr.Top, 0, 0, (New-Object System.Drawing.Size $bw, $bh))
+  $gfx.CopyFromScreen($wr.Left, $wr.Top, 0, 0, (New-Object System.Drawing.Size $pw, $ph))
 }
 $gfx.Dispose()
+
+if ($scale -eq 1.0) {
+  $bmp = $raw
+} else {
+  $bmp = New-Object System.Drawing.Bitmap $bw, $bh
+  $sg = [System.Drawing.Graphics]::FromImage($bmp)
+  $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $sg.DrawImage($raw, 0, 0, $bw, $bh)
+  $sg.Dispose()
+  $raw.Dispose()
+}
 
 $dir = Split-Path -Parent $Out
 if ($dir -and -not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Force -Path $dir) }
@@ -84,4 +105,4 @@ $bmp.Save($target, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 
 $cr = New-Object Win+RECT; [void][Win]::GetClientRect($h, [ref]$cr)
-Write-Output "captured window ${bw}x${bh} (client $($cr.Right)x$($cr.Bottom)) -> $Out"
+Write-Output "captured window ${bw}x${bh} at dpi $dpi (client $($cr.Right)x$($cr.Bottom)) -> $Out"
