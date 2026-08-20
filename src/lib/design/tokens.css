@@ -96,6 +96,19 @@
   --leading-tight: 1.25;
   --leading-snug: 1.4;
   --leading-normal: 1.55;
+
+  /* ---- Volume tints ------------------------------------------------------
+     The spine colour a Volume is drawn with on the Library shelf. Deliberately
+     mid-toned and desaturated: one set has to sit legibly on cream and on
+     near-black, and these are bindings, not highlighter pens. */
+  --tint-ink: #3e3831;
+  --tint-clay: #a0563a;
+  --tint-moss: #5f7a4e;
+  --tint-slate: #4c6579;
+  --tint-wine: #7b3b4e;
+  --tint-ochre: #a8832f;
+  --tint-plum: #6a4e7c;
+  --tint-sea: #3e7a72;
 }
 
 /* =========================================================================
