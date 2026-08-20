@@ -1,0 +1,68 @@
+[package]
+name = "grimoire"
+version = "0.1.0"
+description = "A local-first writing environment built around the metaphor of a physical manuscript."
+authors = ["Grimoire"]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[lib]
+# `_lib` suffix avoids a name collision with the binary on Windows.
+name = "grimoire_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.35"
+
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-appender = "0.2"
+
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "stream",
+  "charset",
+  "http2",
+  "gzip",
+  # rustls with the OS trust store, so corporate CAs and self-hosted gateways
+  # work without the user installing anything extra.
+  "rustls",
+  "rustls-native-certs",
+  # Honour the machine's proxy configuration rather than bypassing it.
+  "system-proxy",
+] }
+
+keyring = "4"
+similar = "3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# The reference device is a low-power tablet; favour a small, fast binary.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,19 @@
+{
+  // Build tooling and dev scripts. These do run under Node, so they get Node
+  // types — which the application tsconfig withholds on purpose.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["vite.config.ts", "svelte.config.js"]
+}
