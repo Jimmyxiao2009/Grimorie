@@ -10,7 +10,10 @@
   import TextField from '$lib/components/TextField.svelte';
 
   import ManuscriptTree from '$lib/manuscript/ManuscriptTree.svelte';
+  import Margin from '$lib/annotations/Margin.svelte';
   import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
+  import { setHighlightRanges, type HighlightRange } from '$lib/editor/highlights';
+  import { textRangeToSelection } from '$lib/editor/offsets';
   import FormatBar from '$lib/editor/FormatBar.svelte';
   import PageEditor, { type EditorState } from '$lib/editor/PageEditor.svelte';
   import SaveIndicator from '$lib/editor/SaveIndicator.svelte';
@@ -19,9 +22,11 @@
   import { viewport } from '$lib/design/viewport.svelte';
   import { activePage } from '$lib/stores/page.svelte';
   import { router } from '$lib/stores/router.svelte';
+  import { margin } from '$lib/stores/margin.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
   import { count } from '$lib/utils/format';
+  import { anchorOf, type Annotation } from '$lib/types/annotation';
 
   interface Props {
     volumeId: string;
@@ -47,8 +52,10 @@
 
   let historyOpen = $state(false);
 
+
   onMount(() => {
     void workspace.open(volumeId, pageId);
+    margin.start();
     autosave.onsaved = (saved) => activePage.adoptSaved(saved);
 
     // A save must not be left waiting on a debounce timer when the writer
@@ -65,6 +72,7 @@
       autosave.onsaved = undefined;
       workspace.close();
       activePage.clear();
+      margin.clear();
     };
   });
 
@@ -77,7 +85,49 @@
     }
     if (activePage.page?.id === id) return;
     void activePage.load(id);
+    void margin.load(id);
   });
+
+  // Saving re-anchors annotations in the same transaction, so the Margin is
+  // re-read once the save lands rather than left showing pre-save offsets.
+  $effect(() => {
+    if (autosave.state === 'saved' && autosave.lastSavedAt !== null) void margin.refresh();
+  });
+
+  // Push annotated ranges into the editor whenever either side changes.
+  $effect(() => {
+    const view = editor?.view ?? null;
+    const map = editorState?.offsets;
+    if (!view || !map) return;
+
+    const ranges: HighlightRange[] = [];
+    for (const annotation of margin.visible) {
+      const anchor = anchorOf(annotation);
+      // Whole-Page notes have nothing to underline.
+      if (!anchor) continue;
+      const { from, to } = textRangeToSelection(map, anchor);
+      ranges.push({
+        id: annotation.id,
+        from,
+        to,
+        kind: annotation.kind,
+        stale: annotation.status === 'stale',
+        focused: margin.focusedId === annotation.id
+      });
+    }
+
+    setHighlightRanges(view, ranges);
+  });
+
+  /** Scrolls the manuscript to an annotation's text and selects it. */
+  function reveal(annotation: Annotation) {
+    const anchor = anchorOf(annotation);
+    const map = editorState?.offsets;
+    if (!anchor || !map || !editor) return;
+    const { from, to } = textRangeToSelection(map, anchor);
+    editor.chain().focus().setTextSelection({ from, to }).scrollIntoView().run();
+    margin.focusedId = annotation.id;
+  }
 
   // Keep the editor's debounce in step with the setting.
   $effect(() => {
@@ -91,6 +141,9 @@
   );
 
   const showNavPane = $derived(viewport.navIsPane);
+  // The Margin is a real pane only when all three regions fit. Below that it
+  // slides over, so the manuscript never gets squeezed to make room for notes.
+  const marginIsPane = $derived(viewport.marginIsPane && margin.paneOpen);
 
   async function leave() {
     await autosave.flush();
@@ -212,6 +265,23 @@
         disabled={!activePage.page}
         onclick={openHistory}
       />
+      <span class="margin-toggle">
+        <IconButton
+          name="panelRight"
+          label={marginIsPane
+            ? margin.openCount > 0
+              ? `Margin, ${margin.openCount} notes`
+              : 'Margin'
+            : 'Open the Margin'}
+          size="sm"
+          pressed={margin.paneOpen}
+          disabled={!activePage.page}
+          onclick={() => margin.setPaneOpen(!margin.paneOpen)}
+        />
+        {#if margin.openCount > 0}
+          <span class="badge tabular" aria-hidden="true">{margin.openCount}</span>
+        {/if}
+      </span>
     </div>
   </header>
 
@@ -264,6 +334,16 @@
         <p class="status">Opening Page…</p>
       {/if}
     </main>
+
+    {#if marginIsPane}
+      <aside class="pane margin-pane">
+        <Margin
+          pageId={activePage.page?.id ?? null}
+          selection={editorState?.selection ?? null}
+          onreveal={reveal}
+        />
+      </aside>
+    {/if}
   </div>
 
   {#if viewport.isNarrow}
@@ -318,6 +398,18 @@
     <Button variant="danger" onclick={confirmDelete}>Delete</Button>
   {/snippet}
 </Dialog>
+
+{#if !marginIsPane && margin.paneOpen}
+  <div class="scrim" role="presentation" onpointerdown={() => margin.setPaneOpen(false)}></div>
+  <aside class="pane margin-overlay">
+    <Margin
+      pageId={activePage.page?.id ?? null}
+      selection={editorState?.selection ?? null}
+      onreveal={reveal}
+      onclose={() => margin.setPaneOpen(false)}
+    />
+  </aside>
+{/if}
 
 <RevisionHistory
   bind:open={historyOpen}
@@ -462,6 +554,50 @@
     color: var(--text-tertiary);
     white-space: nowrap;
     padding-right: var(--space-1);
+  }
+
+  .margin-pane {
+    width: var(--pane-margin);
+    border-right: none;
+    border-left: var(--border-width) solid var(--border-subtle);
+  }
+
+  .margin-overlay {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: var(--z-pane);
+    width: min(22rem, 90vw);
+    border-right: none;
+    border-left: var(--border-width) solid var(--border-default);
+    box-shadow: var(--shadow-overlay);
+    animation: slide-in-right var(--motion-base) var(--ease-out);
+  }
+
+  .margin-toggle {
+    position: relative;
+    display: inline-flex;
+  }
+
+  /* A count on the toggle, so a collapsed Margin still says it holds notes. */
+  .badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 15px;
+    padding: 0 3px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 9px;
+    line-height: 15px;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+    }
   }
 
   .scrim {

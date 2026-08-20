@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 
 use grimoire_lib::database::Database;
+use grimoire_lib::domain::annotation::AnnotationKind;
 use grimoire_lib::repositories;
 use serde_json::json;
 
@@ -138,6 +139,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         document(vec![paragraph(
             "手稿属于用户。The manuscript belongs to the user — 一句她抄在扉页上的话，却从未真正相信过。",
         )]),
+    )?;
+
+    // A few margin notes, including one anchored to text that exists and one
+    // whose text has since changed — so the stale path is visible too.
+    let crows_text = repositories::pages::get(&conn, crows.id)?.plain_text;
+    let mut anchor_on =
+        |phrase: &str, kind, body: &str| -> Result<(), Box<dyn std::error::Error>> {
+            if let Some(byte) = crows_text.find(phrase) {
+                let from = crows_text[..byte].chars().count() as i64;
+                let to = from + phrase.chars().count() as i64;
+                repositories::annotations::create_anchored(&conn, crows.id, kind, body, from, to)?;
+            }
+            Ok(())
+        };
+
+    anchor_on(
+        "carters",
+        AnnotationKind::Question,
+        "Whose voice is this? If Ilse has never met them, she cannot know what they said.",
+    )?;
+    anchor_on(
+        "the knife her mother had used for bread",
+        AnnotationKind::Suggestion,
+        "Too neat. Let the knife be ordinary here and terrible later.",
+    )?;
+    repositories::annotations::create_for_page(
+        &conn,
+        crows.id,
+        AnnotationKind::Note,
+        "Opening works. The second paragraph is doing two jobs.",
     )?;
 
     repositories::volumes::touch_opened(&conn, salt.id)?;

@@ -10,6 +10,7 @@
 
 import * as manuscript from '$lib/services/manuscript';
 import { openVolume, refreshOutline } from '$lib/services/library';
+import { IpcError } from '$lib/services/ipc';
 import { notices } from './notices.svelte';
 import { router } from './router.svelte';
 import type { ChapterOutline, Outline, PageSummary } from '$lib/types/manuscript';
@@ -55,6 +56,13 @@ class WorkspaceStore {
       this.selectPage(remembered ?? this.firstPageId());
     } catch (error) {
       this.outline = null;
+      // A remembered Volume that no longer exists is not an error the writer
+      // needs to read — it was deleted, or the library file changed. Go back to
+      // the shelf rather than stranding them on a failure screen.
+      if (error instanceof IpcError && error.isMissing) {
+        router.toLibrary();
+        return;
+      }
       this.failure =
         error instanceof Error ? error.message : 'Grimoire couldn’t open that Volume.';
     } finally {

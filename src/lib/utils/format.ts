@@ -1,6 +1,16 @@
 /** Formatting helpers shared by the shelf, the tree, and the status line. */
 
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+/**
+ * Grimoire's interface is English-only, so its dates are too.
+ *
+ * The OS locale was tried first and produced "2分钟前" beside an English label
+ * in the Margin, which reads as a bug rather than as thoughtfulness. When there
+ * is a real language setting, this should follow it.
+ *
+ * Numbers keep the OS locale: digit grouping is a regional convention rather
+ * than a language, and "41,208" versus "41 208" never looks out of place.
+ */
+const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const compact = new Intl.NumberFormat(undefined);
 
 const MINUTE = 60_000;
@@ -11,8 +21,6 @@ const WEEK = 7 * DAY;
 /**
  * "just now", "2 hours ago", "last week", or a date once it stops being
  * usefully relative.
- *
- * Uses the OS locale rather than hardcoding English phrasing.
  */
 export function relativeTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return 'never';
@@ -29,7 +37,7 @@ export function relativeTime(iso: string | null | undefined, now = Date.now()): 
   if (elapsed < WEEK) return relative.format(-Math.floor(elapsed / DAY), 'day');
   if (elapsed < 4 * WEEK) return relative.format(-Math.floor(elapsed / WEEK), 'week');
 
-  return new Date(at).toLocaleDateString(undefined, {
+  return new Date(at).toLocaleDateString('en', {
     year: 'numeric',
     month: 'short',
     day: 'numeric'
