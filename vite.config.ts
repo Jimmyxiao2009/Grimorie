@@ -6,13 +6,17 @@ import { fileURLToPath, URL } from 'node:url';
 // Tauri drives the dev server on a fixed port and watches src-tauri itself.
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
 
   resolve: {
     alias: {
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url))
-    }
+    },
+    // Component tests mount real components, which needs Svelte's browser
+    // build; without this, `svelte` resolves to its server entry under Vitest
+    // and `mount()` throws. Scoped to test mode so the app build is untouched.
+    conditions: mode === 'test' ? ['browser'] : undefined
   },
 
   // Tauri expects a fixed port and fails if it is not available.
@@ -45,4 +49,4 @@ export default defineConfig({
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
     setupFiles: ['./tests/setup.ts']
   }
-});
+}));

@@ -80,7 +80,7 @@
   });
 
   /** The pointer id that owns the current stroke, or null. */
-  let drawingPointerId: number | null = null;
+  let drawingPointerId = $state<number | null>(null);
 
   function surfacePoint(event: PointerEvent): { x: number; y: number } {
     const rect = svg!.getBoundingClientRect();
@@ -89,6 +89,24 @@
     // so the surface's own top is the origin; scrollOffset is not needed here
     // because the surface element moves with the content.
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  /**
+   * A stored point from a pointer sample, carrying pressure when the device
+   * reports it.
+   *
+   * A pen that does not support pressure, and a mouse with a button down, both
+   * report exactly 0.5 — which `renderWidth` maps to the base width, so those
+   * devices draw as though pressure were absent. A reading of 0 means "no
+   * pressure information", not "pressed infinitely lightly", and is dropped
+   * rather than stored as a hairline.
+   */
+  function pointFrom(event: PointerEvent): InkStroke['points'][number] {
+    const point = normalizePoint(surfacePoint(event), surfaceWidth, 0);
+    if (event.pointerType === 'pen' && event.pressure > 0) {
+      point.pressure = event.pressure;
+    }
+    return point;
   }
 
   function onPointerDown(event: PointerEvent) {
@@ -102,29 +120,30 @@
     // arrives as extra touch/pen pointers and must not start a second stroke.
     if (drawingPointerId !== null) return;
 
+    const raw = surfacePoint(event);
+
+    if (ink.tool === 'eraser') {
+      // The eraser works on a down-tap: erase the nearest stroke and end. It
+      // deliberately takes no pointer capture — there is no ongoing gesture to
+      // follow, and capturing would leave the surface holding a pointer it has
+      // no further use for. The raw surface-pixel point is passed because
+      // hitTestStroke denormalises stored points to compare against it; a
+      // normalised x here would be denormalised twice.
+      event.preventDefault();
+      void ink.eraseAt(raw, surfaceWidth);
+      return;
+    }
+
     drawingPointerId = event.pointerId;
     svg!.setPointerCapture(event.pointerId);
     event.preventDefault();
-
-    const raw = surfacePoint(event);
-    const point = normalizePoint(raw, surfaceWidth, 0);
-
-    if (ink.tool === 'eraser') {
-      // The eraser works on a down-tap: erase the nearest stroke and end. The
-      // raw surface-pixel point is passed because hitTestStroke denormalises
-      // stored points to compare against it — passing a normalised x here would
-      // be denormalised twice.
-      void ink.eraseAt(raw, surfaceWidth);
-      drawingPointerId = null;
-      return;
-    }
 
     activeStroke = {
       id: crypto.randomUUID(),
       tool: ink.tool === 'highlighter' ? 'highlighter' : 'pen',
       color: ink.activeColor,
       width: ink.activeWidth,
-      points: [point],
+      points: [pointFrom(event)],
       createdAt: new Date().toISOString()
     };
   }
@@ -135,46 +154,87 @@
     if (event.pointerId !== drawingPointerId) return;
     event.preventDefault();
 
-    const raw = surfacePoint(event);
-    const point = normalizePoint(raw, surfaceWidth, 0);
     // Coalesced events carry the intermediate samples the OS bundled together,
-    // so a fast stroke does not lose points between frames.
-    const coalesced = event.getCoalescedEvents();
+    // so a fast stroke does not lose points between frames. Not every engine
+    // implements it, and a missing method must not cost the stroke its point.
+    const coalesced =
+      typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
     if (coalesced.length > 0) {
       for (const sample of coalesced) {
-        const cp = surfacePoint(sample);
-        activeStroke.points.push(normalizePoint(cp, surfaceWidth, 0));
+        activeStroke.points.push(pointFrom(sample));
       }
     } else {
-      activeStroke.points.push(point);
+      activeStroke.points.push(pointFrom(event));
     }
   }
 
-  async function onPointerUp(event: PointerEvent) {
-    if (event.pointerId !== drawingPointerId) return;
+  /**
+   * Ends the stroke in progress, if any.
+   *
+   * `keep` decides its fate: a finished stroke is committed, an interrupted one
+   * is discarded. Either way the pointer bookkeeping is cleared, which is the
+   * part that must never be skipped — `onPointerDown` refuses to start while
+   * `drawingPointerId` is set, so a stroke that ends without clearing it wedges
+   * the surface against every future stroke.
+   */
+  async function endStroke(keep: boolean): Promise<void> {
+    const pointerId = drawingPointerId;
     drawingPointerId = null;
-    if (svg!.hasPointerCapture(event.pointerId)) {
-      svg!.releasePointerCapture(event.pointerId);
+
+    if (pointerId !== null && svg?.hasPointerCapture(pointerId)) {
+      svg.releasePointerCapture(pointerId);
     }
-    if (!activeStroke) return;
 
     const stroke = activeStroke;
     activeStroke = null;
+    if (!keep || !stroke || stroke.points.length === 0) return;
 
-    if (stroke.points.length === 0) return;
     await ink.commitStroke(stroke);
     // Let the store settle so the committed stroke replaces the local one
     // without a flicker gap.
     await tick();
   }
 
+  async function onPointerUp(event: PointerEvent) {
+    if (event.pointerId !== drawingPointerId) return;
+    await endStroke(true);
+  }
+
   function onPointerCancel(event: PointerEvent) {
     if (event.pointerId !== drawingPointerId) return;
-    drawingPointerId = null;
     // A cancelled stroke is discarded — it was interrupted, not finished, so
     // persisting a partial mark would be worse than dropping it.
-    activeStroke = null;
+    void endStroke(false);
   }
+
+  /**
+   * The safety net for capture lost without a pointerup or pointercancel.
+   *
+   * The browser drops capture on its own in cases the other two handlers never
+   * see — the element being detached, a system gesture taking the pointer, the
+   * window losing focus mid-stroke. Left unhandled, `drawingPointerId` stays
+   * set and the surface silently refuses every subsequent stroke for the rest
+   * of its life. That is the worst possible failure for a writing surface, so
+   * it is caught explicitly.
+   *
+   * The stroke is *kept*: the pen really did draw it, and this codebase's rule
+   * is that handwriting is never silently discarded. In the ordinary case this
+   * fires just after `pointerup` has already ended the stroke, and finds
+   * nothing to do.
+   */
+  function onLostPointerCapture(event: PointerEvent) {
+    if (event.pointerId !== drawingPointerId) return;
+    void endStroke(true);
+  }
+
+  // Leaving pen mode mid-stroke — closing the Margin overlay, switching tools,
+  // a keyboard shortcut — must not strand the stroke. The surface stops taking
+  // input the moment `active` goes false, so no pointerup would ever arrive.
+  $effect(() => {
+    if (!active && drawingPointerId !== null) {
+      void endStroke(true);
+    }
+  });
 
   // Render the active stroke's path reactively. `activeStroke` is `$state`, so
   // mutating its points (and clearing it) re-runs this without waking the store.
@@ -205,6 +265,7 @@
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointercancel={onPointerCancel}
+  onlostpointercapture={onLostPointerCapture}
 >
   <!-- Highlighters sit behind pens so they read as a wash under handwriting. -->
   {#each highlighters as stroke (stroke.id)}
