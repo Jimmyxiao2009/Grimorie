@@ -66,6 +66,19 @@ pub struct BuiltContext {
     pub trimmed: bool,
     /// A sentence the UI shows before anything is sent.
     pub summary: String,
+    /// Recognised handwritten margin notes on the Page, included verbatim as
+    /// `[Handwritten note]` blocks. Short, and the writer's own marginalia, so
+    /// they are not subject to the surrounding-text budget.
+    #[serde(default)]
+    pub ink_notes: Vec<InkNoteContextOwned>,
+}
+
+/// An owned form of [`InkNoteContext`], for the serialisable [`BuiltContext`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InkNoteContextOwned {
+    pub transcript: String,
+    pub anchored_text: String,
 }
 
 /// The pieces a context is assembled from.
@@ -80,6 +93,12 @@ pub struct ContextSources<'a> {
     /// Neighbouring Pages in the Chapter, in manuscript order. Only used by the
     /// `chapter` policy.
     pub neighbours: &'a [(String, String)],
+    /// Recognised handwritten margin notes on this Page. Each carries its
+    /// transcript and, when the note is anchored, the prose it points at — so a
+    /// model can hear the writer's own marginalia alongside the manuscript
+    /// without ever receiving raw stroke coordinates. The transcript is the
+    /// writer-corrected one when present.
+    pub ink_notes: &'a [InkNoteContextOwned],
 }
 
 /// Takes characters from the end of a string.
@@ -197,6 +216,8 @@ pub fn build(
         summary
     };
 
+    let ink_notes = sources.ink_notes.to_vec();
+
     BuiltContext {
         selection,
         surrounding,
@@ -204,6 +225,7 @@ pub fn build(
         chars_sent,
         trimmed,
         summary,
+        ink_notes,
     }
 }
 
@@ -217,6 +239,18 @@ pub fn render(context: &BuiltContext) -> String {
     if !context.selection.is_empty() {
         message.push_str("\n\nThe selected passage:\n");
         message.push_str(&context.selection);
+    }
+    if !context.ink_notes.is_empty() {
+        message.push_str("\n\nHandwritten margin notes on this Page:");
+        for note in &context.ink_notes {
+            message.push_str("\n[Handwritten note");
+            if !note.anchored_text.is_empty() {
+                message.push_str(" anchored to: ");
+                message.push_str(&note.anchored_text);
+            }
+            message.push_str("]\n");
+            message.push_str(&note.transcript);
+        }
     }
     message
 }
@@ -241,6 +275,7 @@ mod tests {
             from,
             to,
             neighbours,
+            ink_notes: &[],
         }
     }
 
@@ -310,6 +345,7 @@ mod tests {
                 from: 0,
                 to: 5,
                 neighbours: &[],
+                ink_notes: &[],
             },
             ContextPolicy::Page,
             400,
@@ -366,10 +402,96 @@ mod tests {
                 from: 2,
                 to: 4,
                 neighbours: &[],
+                ink_notes: &[],
             },
             ContextPolicy::Selection,
             8000,
         );
         assert_eq!(built.selection, "属于");
+    }
+
+    #[test]
+    fn ink_notes_are_carried_into_context() {
+        let (from, to) = offsets("the carters said");
+        let ink = [
+            InkNoteContextOwned {
+                transcript: "这里的转折太突然了".into(),
+                anchored_text: "the carters said".into(),
+            },
+            InkNoteContextOwned {
+                transcript: "move this later".into(),
+                anchored_text: String::new(),
+            },
+        ];
+        let built = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            8000,
+        );
+        assert_eq!(built.ink_notes.len(), 2);
+        assert_eq!(built.ink_notes[0].transcript, "这里的转折太突然了");
+    }
+
+    #[test]
+    fn ink_notes_render_as_handwritten_note_blocks() {
+        let (from, to) = offsets("the carters said");
+        let ink = [InkNoteContextOwned {
+            transcript: "too abrupt here".into(),
+            anchored_text: "the carters said".into(),
+        }];
+        let built = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            8000,
+        );
+        let rendered = render(&built);
+        assert!(rendered.contains("Handwritten margin notes"));
+        assert!(rendered.contains("[Handwritten note anchored to: the carters said]"));
+        assert!(rendered.contains("too abrupt here"));
+        // Stroke coordinates never appear in context.
+        assert!(!rendered.contains("points"));
+    }
+
+    #[test]
+    fn an_unanchored_ink_note_renders_without_an_anchor() {
+        let (from, to) = offsets("the carters said");
+        let ink = [InkNoteContextOwned {
+            transcript: "whole page note".into(),
+            anchored_text: String::new(),
+        }];
+        let built = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            8000,
+        );
+        let rendered = render(&built);
+        assert!(rendered.contains("[Handwritten note]\nwhole page note"));
     }
 }

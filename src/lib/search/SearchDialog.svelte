@@ -83,7 +83,8 @@
     volume: 'volume',
     chapter: 'chapter',
     page: 'page',
-    annotation: 'margin'
+    annotation: 'margin',
+    ink: 'pencil'
   };
 
   /** Splits a snippet into marked and unmarked runs, without building markup. */

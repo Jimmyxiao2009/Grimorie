@@ -25,9 +25,10 @@
     ondelete: (annotation: Annotation) => void;
     onreveal: (annotation: Annotation) => void;
     onconverted?: () => void;
+    onask?: () => void;
   }
 
-  let { annotation, focused, onfocus, ondelete, onreveal, onconverted }: Props = $props();
+  let { annotation, focused, onfocus, ondelete, onreveal, onconverted, onask }: Props = $props();
 
   const anchor = $derived(anchorOf(annotation));
   const stale = $derived(annotation.status === 'stale');
@@ -138,6 +139,13 @@
       label: showTranscript ? 'Hide recognized text' : 'Show recognized text',
       disabled: !hasTranscript,
       select: toggleTranscript
+    },
+    {
+      id: 'ask-ai',
+      label: 'Ask AI about this note',
+      icon: 'sparkle',
+      disabled: !canRecognize || !hasTranscript || !onask,
+      select: () => onask?.()
     },
     { kind: 'separator', id: 'sep-1' },
     {

@@ -249,6 +249,7 @@
             }}
             {onreveal}
             onconverted={() => margin.refresh()}
+            onask={beginAsk}
           />
         {:else}
           <AnnotationCard

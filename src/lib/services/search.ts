@@ -1,6 +1,6 @@
 import { invoke } from './ipc';
 
-export type SearchEntityKind = 'volume' | 'chapter' | 'page' | 'annotation';
+export type SearchEntityKind = 'volume' | 'chapter' | 'page' | 'annotation' | 'ink';
 
 export type SearchHit = {
   kind: SearchEntityKind;

@@ -194,6 +194,11 @@ fn prepare(
         Vec::new()
     };
 
+    // Recognised handwritten margin notes on this Page. The transcript is the
+    // writer-corrected one when present (the writer wins), and the anchored
+    // prose comes from the note's own anchor — never raw stroke coordinates.
+    let ink_notes = ink_notes_for_context(conn, page.id, &page.plain_text)?;
+
     let built = context::build(
         ContextSources {
             volume_title: &volume.title,
@@ -203,6 +208,7 @@ fn prepare(
             from: from.max(0) as usize,
             to: to.max(0) as usize,
             neighbours: &neighbours,
+            ink_notes: &ink_notes,
         },
         profile.context_policy,
         settings.ai_context_budget_chars,
@@ -245,6 +251,48 @@ fn prepare(
         action,
         profile_name: profile.name,
     })
+}
+
+/// Gathers the recognised handwritten margin notes on a Page for AI context.
+///
+/// Each note carries its transcript (the writer-corrected one when present) and,
+/// when the note is anchored, the prose it points at. Raw stroke coordinates are
+/// never included — a model hears the writer's marginalia as text, not geometry.
+/// Notes without a transcript are skipped: there is nothing for the model to read.
+///
+/// Returns owned transcript/anchor pairs plus the borrowed view `build` consumes,
+/// so the owned strings live long enough without the caller juggling lifetimes.
+fn ink_notes_for_context(
+    conn: &rusqlite::Connection,
+    page_id: crate::domain::PageId,
+    page_text: &str,
+) -> Result<Vec<context::InkNoteContextOwned>> {
+    let mut out = Vec::new();
+    let ink_annotations = repositories::ink::list_ink_annotations(conn, page_id)?;
+    for annotation in ink_annotations {
+        let Some(record) = repositories::ink_recognition::get(conn, annotation.id)? else {
+            continue;
+        };
+        let Some(transcript) = record.transcript().map(str::to_string) else {
+            continue;
+        };
+        // The anchored prose: the text the note points at, so the model can hear
+        // what the marginalia refers to without the full Page repeated.
+        let anchored_text = match annotation.anchor() {
+            Some(anchor) => {
+                let chars: Vec<char> = page_text.chars().collect();
+                let from = (anchor.from as usize).min(chars.len());
+                let to = (anchor.to as usize).min(chars.len());
+                chars[from..to].iter().collect()
+            }
+            None => String::new(),
+        };
+        out.push(context::InkNoteContextOwned {
+            transcript,
+            anchored_text,
+        });
+    }
+    Ok(out)
 }
 
 /// Describes what an action would send, without sending anything.
