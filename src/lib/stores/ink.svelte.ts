@@ -75,8 +75,10 @@ class InkStore {
 
   private pageId: string | null = null;
   private token = 0;
-  private undoStack: UndoEntry[] = [];
-  private redoStack: UndoEntry[] = [];
+  // The undo/redo stacks are $state so canUndo/canRedo react to pushes and
+  // pops; a plain array would mutate without notifying the derived flags.
+  private undoStack = $state<UndoEntry[]>([]);
+  private redoStack = $state<UndoEntry[]>([]);
 
   readonly canUndo = $derived(this.undoStack.length > 0);
   readonly canRedo = $derived(this.redoStack.length > 0);
