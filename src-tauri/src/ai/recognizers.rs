@@ -108,6 +108,17 @@ impl InkRecognizer for VisionRecognizer {
 
             let data_base64 = base64::encode(png);
             let model = self.resolved_model().to_string();
+            // The writer's configured language, when they set one. Without this
+            // the setting was read from the database, carried all the way onto
+            // the request, and then dropped on the floor here.
+            let user_message = match &request.language_hint {
+                crate::domain::ink_recognition::LanguageHint::Auto => {
+                    prompt::TRANSCRIBE_USER.to_string()
+                }
+                crate::domain::ink_recognition::LanguageHint::Language(tag) => {
+                    prompt::transcribe_user_with_language(tag)
+                }
+            };
             let ai_request = crate::ai::AiRequest {
                 base_url: self.base_url.clone(),
                 model: model.clone(),
@@ -120,7 +131,7 @@ impl InkRecognizer for VisionRecognizer {
                     crate::ai::AiMessage {
                         role: crate::ai::AiRole::User,
                         content: crate::ai::AiContent::text_and_image(
-                            prompt::TRANSCRIBE_USER,
+                            &user_message,
                             "image/png",
                             &data_base64,
                         ),
@@ -503,6 +514,120 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidInput);
         assert!(err.message.contains("no handwriting"));
+    }
+
+    /// A provider that records the request it was handed and returns a fixed
+    /// transcript, so the prompt actually sent can be asserted on.
+    struct CapturingProvider {
+        seen: Mutex<Option<crate::ai::AiRequest>>,
+    }
+
+    impl CapturingProvider {
+        fn new() -> Self {
+            Self {
+                seen: Mutex::new(None),
+            }
+        }
+
+        /// The text of the user turn, flattened for assertion. The image part
+        /// is skipped — what is under test is the instruction beside it.
+        fn user_text(&self) -> String {
+            let guard = self.seen.lock().unwrap();
+            let request = guard.as_ref().expect("the provider was never called");
+            let mut out = String::new();
+            for message in &request.messages {
+                if !matches!(message.role, crate::ai::AiRole::User) {
+                    continue;
+                }
+                match &message.content {
+                    crate::ai::AiContent::Text(text) => out.push_str(text),
+                    crate::ai::AiContent::Parts(parts) => {
+                        for part in parts {
+                            if let crate::ai::AiContentPart::Text { text } = part {
+                                out.push_str(text);
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        }
+    }
+
+    impl crate::ai::AiProvider for CapturingProvider {
+        fn name(&self) -> &'static str {
+            "capturing"
+        }
+        fn stream<'a>(
+            &'a self,
+            request: crate::ai::AiRequest,
+            _: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::ai::AiStream>> + Send + 'a>> {
+            *self.seen.lock().unwrap() = Some(request);
+            Box::pin(async {
+                let chunks: Vec<Result<AiChunk>> = vec![
+                    Ok(AiChunk::Delta(
+                        r#"{"text":"transcribed","language":"zh-CN"}"#.to_string(),
+                    )),
+                    Ok(AiChunk::Done),
+                ];
+                Ok(Box::pin(futures_util::stream::iter(chunks)) as crate::ai::AiStream)
+            })
+        }
+    }
+
+    fn recognizer_for(provider: Arc<dyn crate::ai::AiProvider>) -> VisionRecognizer {
+        VisionRecognizer::new(
+            provider,
+            "https://example.test/v1".into(),
+            "gpt-4o".into(),
+            "key".into(),
+            0.0,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_configured_language_reaches_the_prompt() {
+        // The setting was read from the database and carried onto the request,
+        // and then the recognizer ignored it entirely.
+        let provider = Arc::new(CapturingProvider::new());
+        let recognizer = recognizer_for(Arc::clone(&provider) as Arc<dyn crate::ai::AiProvider>);
+
+        recognizer
+            .recognize(
+                InkRecognitionRequest {
+                    input: image_input(),
+                    mode: RecognitionMode::Auto,
+                    language_hint: LanguageHint::parse("zh-CN"),
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let text = provider.user_text();
+        assert!(
+            text.contains("zh-CN"),
+            "the language hint was dropped: {text}"
+        );
+        // A hint is a prior, not a constraint: someone who writes Chinese still
+        // writes English terms in their margins.
+        assert!(text.contains("hint, not a rule"));
+        assert!(text.contains("never translate"));
+    }
+
+    #[tokio::test]
+    async fn an_automatic_language_asks_for_no_particular_one() {
+        let provider = Arc::new(CapturingProvider::new());
+        let recognizer = recognizer_for(Arc::clone(&provider) as Arc<dyn crate::ai::AiProvider>);
+
+        recognizer
+            .recognize(request(), CancellationToken::new())
+            .await
+            .unwrap();
+
+        let text = provider.user_text();
+        assert_eq!(text.trim(), prompt::TRANSCRIBE_USER);
     }
 
     #[tokio::test]

@@ -43,6 +43,22 @@ The output must be a JSON object with two fields:
 /// and the user turn's job is to point the model at the image.
 pub const TRANSCRIBE_USER: &str = "Transcribe the handwriting in this image.";
 
+/// The user message for a writer who has named the language they write in.
+///
+/// A language hint is a *prior*, not a constraint. Someone who sets "zh-CN"
+/// still writes English terms in their margins, and a recognizer told to
+/// produce Chinese would transliterate them or drop them. So the hint says what
+/// to expect and then explicitly refuses to let that override what is on the
+/// page — the note's actual content always wins.
+pub fn transcribe_user_with_language(tag: &str) -> String {
+    format!(
+        "Transcribe the handwriting in this image.\n\n\
+         The writer usually writes in {tag}, so prefer that reading where the \
+         handwriting is ambiguous. This is a hint, not a rule: transcribe any \
+         other language exactly as it is written, and never translate into {tag}."
+    )
+}
+
 /// Parses a recognizer reply into a transcript and language.
 ///
 /// The model is asked for a small JSON object, but models do not always honour a
