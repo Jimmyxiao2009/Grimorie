@@ -77,6 +77,59 @@ impl VisionRecognizer {
     fn resolved_model(&self) -> &str {
         self.model_override.as_deref().unwrap_or(&self.model)
     }
+
+    /// Rewrites a provider refusal that actually means "this model cannot read
+    /// images" into something the writer can act on.
+    ///
+    /// There is no portable way to ask an OpenAI-compatible endpoint whether a
+    /// model is vision-capable before sending it an image — capability
+    /// endpoints are vendor-specific where they exist at all, and hardcoding a
+    /// model list would be wrong the week after it was written. So the check is
+    /// made on the refusal instead, by looking for the two things such a
+    /// refusal always contains: a mention of images, and a refusal to handle
+    /// them. Anything else keeps the transport's own wording.
+    fn explain(&self, err: AppError) -> AppError {
+        let detail = err.detail.as_deref().unwrap_or_default();
+        if !mentions_unsupported_image(detail) {
+            return err;
+        }
+        AppError::new(
+            ErrorCode::Provider,
+            format!(
+                "{} cannot read handwriting. Choose a vision-capable model for \
+                 handwriting recognition in AI settings.",
+                self.resolved_model()
+            ),
+        )
+        .with_detail(detail.to_string())
+    }
+}
+
+/// Whether a provider's refusal is about image input it cannot accept.
+///
+/// Both signals are required. A message merely containing "image" might be
+/// about anything; one that also refuses ("not supported", "invalid content")
+/// is a capability problem, and telling the writer to pick a different model is
+/// the right advice. Getting this wrong in the cautious direction just means
+/// showing the transport's original message, which is what happened before.
+fn mentions_unsupported_image(detail: &str) -> bool {
+    let lower = detail.to_lowercase();
+    let mentions_image = ["image_url", "image", "vision", "multimodal"]
+        .iter()
+        .any(|token| lower.contains(token));
+    let refuses = [
+        "not support",
+        "unsupported",
+        "invalid content",
+        "invalid_content",
+        "invalid type",
+        "cannot process",
+        "only supported",
+        "does not accept",
+    ]
+    .iter()
+    .any(|token| lower.contains(token));
+    mentions_image && refuses
 }
 
 impl InkRecognizer for VisionRecognizer {
@@ -141,10 +194,14 @@ impl InkRecognizer for VisionRecognizer {
                 max_output_tokens: Some(1_024),
             };
 
-            let mut stream = self.provider.stream(ai_request, cancel).await?;
+            let mut stream = self
+                .provider
+                .stream(ai_request, cancel)
+                .await
+                .map_err(|err| self.explain(err))?;
             let mut reply = String::new();
             while let Some(chunk) = stream.next().await {
-                match chunk? {
+                match chunk.map_err(|err| self.explain(err))? {
                     AiChunk::Delta(text) => reply.push_str(&text),
                     AiChunk::Done => break,
                 }
@@ -628,6 +685,94 @@ mod tests {
 
         let text = provider.user_text();
         assert_eq!(text.trim(), prompt::TRANSCRIBE_USER);
+    }
+
+    /// A provider that fails the way an endpoint does when the chosen model
+    /// cannot accept image input.
+    struct RefusingProvider {
+        detail: &'static str,
+    }
+
+    impl crate::ai::AiProvider for RefusingProvider {
+        fn name(&self) -> &'static str {
+            "refusing"
+        }
+        fn stream<'a>(
+            &'a self,
+            _: crate::ai::AiRequest,
+            _: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::ai::AiStream>> + Send + 'a>> {
+            let detail = self.detail;
+            Box::pin(async move {
+                Err(
+                    AppError::new(ErrorCode::Provider, "Your AI provider refused the request.")
+                        .with_detail(detail.to_string()),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_model_that_cannot_read_images_says_so() {
+        // Otherwise the writer is told only "Your AI provider refused the
+        // request", with the actual reason buried in the detail — and the
+        // action they need to take (choose a different model) is invisible.
+        let recognizer = recognizer_for(Arc::new(RefusingProvider {
+            detail: "400: Invalid content type. image_url is not supported by this model.",
+        }));
+
+        let err = recognizer
+            .recognize(request(), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.message.contains("cannot read handwriting"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("vision-capable"));
+        // The model that was actually used is named, so the setting to change
+        // is unambiguous.
+        assert!(err.message.contains("gpt-4o"));
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_refusal_keeps_the_transports_wording() {
+        // The rewrite must not swallow every provider error into advice about
+        // vision models.
+        let recognizer = recognizer_for(Arc::new(RefusingProvider {
+            detail: "429: Rate limit exceeded for this organisation.",
+        }));
+
+        let err = recognizer
+            .recognize(request(), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.message, "Your AI provider refused the request.");
+    }
+
+    #[test]
+    fn an_image_refusal_needs_both_signals() {
+        // A refusal about images.
+        assert!(mentions_unsupported_image(
+            "this model does not support image input"
+        ));
+        assert!(mentions_unsupported_image(
+            "Invalid content type: image_url"
+        ));
+        assert!(mentions_unsupported_image("multimodal input unsupported"));
+
+        // A message that merely mentions an image is not a capability problem.
+        assert!(!mentions_unsupported_image(
+            "the image was received and processed"
+        ));
+        // Nor is a refusal about something else.
+        assert!(!mentions_unsupported_image(
+            "temperature is not supported for this model"
+        ));
+        assert!(!mentions_unsupported_image(""));
     }
 
     #[tokio::test]
