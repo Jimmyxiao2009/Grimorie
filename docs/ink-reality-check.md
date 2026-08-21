@@ -17,7 +17,12 @@ pnpm test      86 passed
 git status     clean
 ```
 
-The reported baseline was accurate.
+The reported baseline was accurate. After this pass:
+
+```
+cargo test    391 passed, 1 ignored (the live smoke)
+pnpm test     145 passed
+```
 
 ## 2. What this pass is, and is not
 
@@ -103,30 +108,85 @@ nested inside the transcript panel, which only renders when `recognizedText` is
 non-empty. A note that failed on its first recognition showed the words
 "Recognition failed" and nothing else, anywhere.
 
+**F12. A recognizer failure stranded the note.** `run_recognition` marked a note
+`recognizing` before the request and only *returned* the error. On the automatic
+path the caller is a spawned task nobody awaits, so a failure left the row at
+`recognizing` indefinitely — the Margin showed "Recognizing…" forever, and the
+only way out was a restart, where the startup repair moved it to `pending`.
+
+**F13. Recognition results outlived their ink through undo.** Drawing and
+erasing both invalidated the transcript; undo and redo removed or restored the
+same strokes and said nothing. A note could sit marked `Recognized` with a
+transcript describing handwriting that had been undone — and that transcript is
+what search indexes and what the AI context sends.
+
+### P2 — cost and privacy
+
+**F14. Every schedule became a paid request.** `is_current_for` existed,
+documented as the guard "so a scheduler can skip a needless request", and was
+referenced nowhere outside its own tests.
+
+**F15. Handwritten notes bypassed the AI context budget.** Ink transcripts were
+attached after the budget was spent — every note on the Page, whole. A heavily
+annotated margin could push a request past its limit, and, more seriously,
+`chars_sent` excluded them. That number is what `ai_preview` shows the writer
+before they approve sending their manuscript to a provider, so the figure shown
+understated what actually left the machine.
+
 ### P3 — measurement
 
-**F12. There was no way to measure accuracy.** No fixtures, no CER, no latency
+**F16. There was no way to measure accuracy.** No fixtures, no CER, no latency
 record — so prompt and raster changes could only be judged by impression.
 
-## 4. Raster strategy
+## 4. What was checked and found sound
+
+Not everything audited was broken. Recorded so the next pass does not re-derive
+it:
+
+- **Restart repair** (§34) is wired at `lib.rs` startup and tested; no row can
+  stay `recognizing` across a launch.
+- **Stale rejection** (§25) is correct: the job re-reads the live strokes and
+  compares hashes before committing. F1 was the caller feeding it the wrong
+  snapshot, not a flaw in the check itself.
+- **Manual transcript priority** (§26) holds at write time, in the repository,
+  and survives a failure as well as a successful automatic result.
+- **Search** (§28) indexes only transcripts, never coordinates; CJK and
+  user-corrected transcripts are covered by existing tests.
+- **AI context** (§29) carries the transcript and the anchored prose, never
+  stroke data, and prefers the writer's correction. Its budgeting was not sound
+  — see F15.
+- **Logging** (§41) records character counts, never transcript text, never
+  raster bytes, and stores only the reader-facing half of an error.
+- **Corrupt stroke data** (§38): a malformed points blob logs a warning and
+  loads as an empty stroke rather than failing the Page. The stroke stays in the
+  count, which makes the corruption visible, and nothing rewrites it. Left as
+  is; skipping it entirely would hide the damage rather than surface it.
+
+## 5. Raster strategy
 
 Chosen after the F3/F4 fixes, and documented here because it is the parameter
 most likely to be re-tuned:
 
 ```
-padding          24px (unchanged)
-minimum longest side   768px   — upscale small notes into legibility
+padding                 24px, applied in output pixels after scaling
+minimum longest side  1024px   — upscale small notes into legibility
 maximum longest side  2048px   — bound cost and request size
-minimum short side     64px    — a single low line still gets vertical room
 background       opaque #ffffff, never the live theme
 pen ink          #111111
-highlighter      #c8c8c8 wash, drawn first, behind the pen strokes
+highlighter      #d8d8d8 wash, drawn first, behind the pen strokes
 ```
 
 The floor matters more than the ceiling. Margin handwriting is physically small;
-without upscaling, the model's input was a thumbnail.
+without upscaling, the model's input was a thumbnail. Only the longest side is
+considered — keying off the shortest would blow a single underline up to the cap
+for no gain.
 
-## 5. Evaluation harness
+**This floor is reasoned, not measured.** It comes from margin geometry (a
+three-line note magnifies about 4×, taking ~20px characters to ~85px), not from
+observed CER. Tuning it against a real model is the first job once a provider is
+available.
+
+## 6. Evaluation harness
 
 `tests/ink-recognition-eval.test.ts` runs the deterministic half: fixtures of
 synthetic vector handwriting in `tests/fixtures/ink/`, scored with Character
@@ -138,7 +198,7 @@ The harness scores a *recognizer function*, so the same fixtures can be run
 against a mock (deterministic, in CI) or a live provider (manual, with
 credentials). See `docs/ink-live-smoke.md` for the live path.
 
-## 6. What has NOT been validated
+## 7. What has NOT been validated
 
 Stated plainly, because the temptation to imply otherwise is the whole risk of a
 document like this.
@@ -168,20 +228,46 @@ without being asked is not a validation step. So:
   tests against stubs, not against a real endpoint.
 
 The live recognition path is **not proven**. The fixes above make it
-*capable* of working; they do not demonstrate that it does.
+*capable* of working — F1 alone means it could not have worked at all before —
+but nothing here demonstrates that it does.
 
-## 7. How to run the live check
+**The evaluation fixtures are synthetic.** Their ground truth is real; their
+stroke geometry is procedurally generated and does not spell anything. A run
+over them measures the harness, not a model. Every sample is flagged, and a
+whole-synthetic report prints a warning above its numbers.
+
+## 8. How to run the live check
 
 See `docs/ink-live-smoke.md`. It needs a configured, vision-capable
 OpenAI-compatible provider and is opt-in via an environment variable, so it
 never runs in CI and never spends money by accident.
 
-## 8. Recommended next iteration
+## 9. The coordinate model
+
+Audited and left alone (§12). The model is `x` normalised to `[0, 1]` against
+the surface width, `y` an absolute pixel offset from the surface top.
+
+It is correct by construction under the change that actually happens most —
+the Margin changing width — because every stored `x` is re-multiplied by the
+live width on render. Under DPI change the surface width changes in CSS pixels
+and `x` follows it; `y` does not scale, which is the open question, because a
+note written level with a paragraph would sit lower relative to that paragraph
+if the text reflowed taller while the ink did not.
+
+No drift was reproduced, and no change was made. Changing a coordinate model on
+suspicion would risk existing handwriting for a problem that has not been shown
+to exist; the honest state is that this needs twenty minutes with a real display
+at 100% and 200% before anything is decided. If drift is found, the migration is
+to store `y` normalised against a recorded reference height, keeping the old
+form readable — see the recommendation below.
+
+## 10. Recommended next iteration
 
 1. Run the live smoke on real hardware with a real pen and record CER per
    fixture category. Nothing else on this list is worth doing first.
-2. Tune the raster floor against measured CER rather than the reasoning in §4.
-3. Revisit the 1.5s debounce only after watching someone write with it.
-4. Audit the `y`-is-absolute-pixels coordinate model against real DPI changes;
-   it is sound under width changes, but vertical drift under font-scale or
-   theme changes has not been observed either way.
+2. Replace the fixture set's synthetic geometry with captured strokes. Until
+   then no accuracy number from the harness means anything.
+3. Tune the raster floor against measured CER rather than the reasoning in §5.
+4. Test DPI scaling and portrait on a Surface Go-class device, and settle §9
+   with an observation rather than an argument.
+5. Revisit the 1.5s debounce only after watching someone write with it.

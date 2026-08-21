@@ -8,7 +8,7 @@ This is the one check that talks to a provider. It is `#[ignore]`d and
 environment-gated, so it never runs in CI and never spends money by accident.
 
 **As of this writing it has never been run.** No provider credential was
-available to the session that wrote it. See §6 of
+available to the session that wrote it. See §7 of
 [ink-reality-check.md](ink-reality-check.md).
 
 ## What it proves, and what it does not

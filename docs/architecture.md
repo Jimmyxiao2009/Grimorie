@@ -164,21 +164,34 @@ while a refresh runs, never erased.
 The `InkRecognizer` trait is provider-independent and accepts either raw vectors or a
 rendered image, so a future native Windows recognizer need not take PNG. The MVP
 `VisionRecognizer` reuses the shared OpenAI-compatible transport: strokes are rasterised
-(theme-independent — light background, dark ink, cropped to bounds with padding, capped at
-2048px) and sent to a vision model with a narrow transcribe-only prompt that forbids
-interpretation. The raster is an input artifact, never persisted.
+(theme-independent — light background, dark ink, highlighters as a pale wash behind the pen,
+cropped to bounds with padding) and sent to a vision model with a narrow transcribe-only
+prompt that forbids interpretation. The raster's longest side is both floored at 1024px and
+capped at 2048px: margin handwriting is physically small, and sent at its native size a
+three-line note is a thumbnail the model cannot read. The raster is an input artifact, never
+persisted.
 
 A recognition queue (`RecognitionBookkeeping` in `AppState`) owns the debounce (1.5s), dedup
-(one job per note; a reschedule cancels its predecessor), a 2-job concurrency limit, and
-stale rejection — before committing, a job re-reads the live strokes and discards its result
-if the hash has changed. A `user-edited` transcript is never overwritten by an automatic
-recognition; only an explicit "recognize again" does. Automatic recognition is gated by
-`ai_enabled` and `ink_auto_recognition` (off by default — ink is never sent to a remote
-model silently); a manual recognize bypasses both.
+(one job per note; a reschedule cancels its predecessor), a 2-job concurrency limit shared by
+automatic and manual jobs, and stale rejection — before committing, a job re-reads the live
+strokes and discards its result if the hash has changed. A `user-edited` transcript is never
+overwritten by an automatic recognition; only an explicit "recognize again" does. A note
+whose stored transcript already matches its live ink is skipped without a request, so callers
+may schedule liberally — every path that changes strokes, including undo and redo, does.
+Automatic recognition is gated by `ai_enabled` and `ink_auto_recognition` (off by default —
+ink is never sent to a remote model silently); a manual recognize bypasses both.
+
+Because a job runs in a spawned task with no caller to return to, the queue publishes each
+note's persisted row through a status sink after every transition it makes. The command layer
+turns that into an `ink:recognition-status` event, so the Margin follows a background job to
+its end without polling. The queue itself knows nothing about Tauri.
 
 Recognised transcripts participate in full-text search (indexed as `EntityKind::Ink`,
 searchable for CJK and mixed scripts) and in AI context (rendered as `[Handwritten note]`
-blocks with anchored prose, never raw coordinates). "Convert to Text Note" copies the
+blocks with anchored prose, never raw coordinates). Notes take a bounded share of the context
+budget and count towards the character total the writer is shown before approving a request,
+so marginalia can neither displace the passage being asked about nor leave the machine
+unreported. "Convert to Text Note" copies the
 transcript into a typed annotation recording `source_ink_annotation_id` for lineage, and
 keeps the ink. A `recognizing` row left by an abnormal exit is repaired to `pending` on
 startup, so no note is stuck behind a dead job.
