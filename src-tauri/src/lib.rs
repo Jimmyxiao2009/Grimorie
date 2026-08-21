@@ -74,6 +74,19 @@ pub fn run() {
                 tracing::error!(error = %err, "could not open the library");
             })?;
             tracing::info!(path = ?db.path(), "library opened");
+
+            // Recover recognition rows left mid-flight by an abnormal exit. A
+            // 'recognizing' status can only exist while a job runs; if the app
+            // was killed under one, the row is stuck behind a "Recognizing…"
+            // that can never finish. Moving them to 'pending' is safe and lets
+            // the writer retry — or the scheduler pick them up — on this launch.
+            {
+                let conn = db.get()?;
+                if let Err(err) = repositories::ink_recognition::repair_transient(&conn) {
+                    tracing::warn!(error = %err, "could not repair transient recognition rows");
+                }
+            }
+
             app.manage(AppState::new(db)?);
 
             Ok(())
@@ -117,6 +130,14 @@ pub fn run() {
             commands::ink::ink_add_strokes,
             commands::ink::ink_delete_stroke,
             commands::ink::ink_delete_annotation,
+            commands::ink_recognition::ink_recognize,
+            commands::ink_recognition::ink_recognize_manual,
+            commands::ink_recognition::ink_recognition_for_page,
+            commands::ink_recognition::ink_recognition_status,
+            commands::ink_recognition::ink_edit_transcript,
+            commands::ink_recognition::ink_convert_to_text,
+            commands::ink_recognition::ink_recognize_cancel,
+            commands::ink_recognition::ink_recognition_language,
             commands::history::revisions_list,
             commands::history::revision_get,
             commands::history::revision_restore,

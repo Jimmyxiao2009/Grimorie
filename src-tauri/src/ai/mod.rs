@@ -20,6 +20,7 @@ pub mod context;
 pub mod ink_recognition;
 pub mod openai;
 pub mod prompts;
+pub mod recognition_queue;
 pub mod recognizers;
 
 #[cfg(test)]

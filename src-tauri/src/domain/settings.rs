@@ -33,6 +33,19 @@ pub struct AppSettings {
     pub ai_enabled: bool,
     /// Ceiling on how much manuscript text may accompany one AI request.
     pub ai_context_budget_chars: i64,
+
+    // --- Ink intelligence ---
+    /// Whether handwriting is recognised automatically after the writer pauses.
+    /// Off by default: recognition sends ink to a remote model, and that must be
+    /// an explicit choice rather than a silent one.
+    pub ink_auto_recognition: bool,
+    /// A specific model to use for handwriting recognition, overriding the
+    /// configured provider's model. Empty means "use the provider's model"; set
+    /// it when the writer has a vision-specific model distinct from the one used
+    /// for manuscript-reading actions.
+    pub ink_recognition_model: String,
+    /// A language hint for recognition: `auto` (the default) or a BCP-47 tag.
+    pub ink_recognition_language: String,
 }
 
 impl Default for AppSettings {
@@ -51,6 +64,10 @@ impl Default for AppSettings {
 
             ai_enabled: false,
             ai_context_budget_chars: 8_000,
+
+            ink_auto_recognition: false,
+            ink_recognition_model: String::new(),
+            ink_recognition_language: "auto".into(),
         }
     }
 }
@@ -81,6 +98,14 @@ impl AppSettings {
         self.autosave_debounce_ms = self.autosave_debounce_ms.clamp(200, 5_000);
         self.revision_interval_seconds = self.revision_interval_seconds.clamp(60, 3_600);
         self.ai_context_budget_chars = self.ai_context_budget_chars.clamp(500, 200_000);
+
+        // A language hint is either `auto` or a short tag; trim it so a stray
+        // space does not turn "auto" into something the recognizer cannot parse.
+        self.ink_recognition_language = self.ink_recognition_language.trim().to_string();
+        if self.ink_recognition_language.is_empty() {
+            self.ink_recognition_language = "auto".into();
+        }
+        self.ink_recognition_model = self.ink_recognition_model.trim().to_string();
 
         self
     }

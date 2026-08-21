@@ -218,6 +218,42 @@ pub fn delete_stroke(conn: &Connection, id: StrokeId) -> Result<()> {
     Ok(())
 }
 
+/// The annotation a stroke belongs to, so a mutation can invalidate the right
+/// recognition row without a separate lookup by the caller.
+pub fn annotation_of_stroke(conn: &Connection, id: StrokeId) -> Result<AnnotationId> {
+    conn.query_row(
+        "SELECT annotation_id FROM ink_strokes WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )
+    .map_err(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => AppError::not_found("stroke"),
+        other => other.into(),
+    })
+}
+
+/// Every stroke belonging to one ink annotation, in drawing order.
+///
+/// Used by the recognition queue to re-read a note's strokes for a
+/// stale-rejection hash: recognition captures the ink as it was scheduled, and
+/// before committing it re-reads the live strokes to be sure the writer has not
+/// added or erased any in the meantime.
+pub fn strokes_for_annotation(
+    conn: &Connection,
+    annotation_id: AnnotationId,
+) -> Result<Vec<InkStroke>> {
+    let mut statement = conn.prepare(
+        "SELECT id, annotation_id, tool, color, width, points_json, position, created_at
+           FROM ink_strokes
+          WHERE annotation_id = ?1
+          ORDER BY position",
+    )?;
+    let rows = statement
+        .query_map(params![annotation_id], map)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// The number of strokes an ink annotation carries, for deciding whether an
 /// empty ink note should be pruned.
 pub fn stroke_count(conn: &Connection, annotation_id: AnnotationId) -> Result<i64> {

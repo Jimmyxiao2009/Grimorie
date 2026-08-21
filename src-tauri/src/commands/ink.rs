@@ -50,7 +50,7 @@ pub struct PointInput {
 }
 
 impl StrokeInput {
-    fn into_domain(self) -> Result<InkStroke> {
+    pub(crate) fn into_domain(self) -> Result<InkStroke> {
         let id = StrokeId::parse(&self.id)?;
         let tool = parse_tool(&self.tool)?;
         let points = self
@@ -155,6 +155,10 @@ pub async fn ink_notes_for_page(
 
 /// Persists strokes drawn locally, on `pointerup`. One call per finished stroke
 /// keeps the write rate to "once per pen lift" rather than once per point.
+///
+/// Adding strokes changes the ink, so any existing recognition is invalidated:
+/// the old transcript no longer describes the handwriting on screen, and a fresh
+/// recognition is due.
 #[tauri::command]
 pub async fn ink_add_strokes(
     state: State<'_, AppState>,
@@ -167,16 +171,29 @@ pub async fn ink_add_strokes(
         .map(StrokeInput::into_domain)
         .collect::<Result<Vec<_>>>()?;
     state
-        .write(move |tx| repositories::ink::add_strokes(tx, annotation, &domain_strokes))
+        .write(move |tx| {
+            repositories::ink::add_strokes(tx, annotation, &domain_strokes)?;
+            repositories::ink_recognition::invalidate(tx, annotation)?;
+            Ok(())
+        })
         .await
 }
 
 /// Removes a single stroke — the eraser's unit of work.
+///
+/// Erasing changes the ink, so the note's recognition is invalidated just as an
+/// add does. The annotation is resolved before the delete, because the stroke
+/// row is gone once the delete runs.
 #[tauri::command]
 pub async fn ink_delete_stroke(state: State<'_, AppState>, id: String) -> Result<()> {
     let stroke = StrokeId::parse(&id)?;
     state
-        .write(move |tx| repositories::ink::delete_stroke(tx, stroke))
+        .write(move |tx| {
+            let annotation = repositories::ink::annotation_of_stroke(tx, stroke)?;
+            repositories::ink::delete_stroke(tx, stroke)?;
+            repositories::ink_recognition::invalidate(tx, annotation)?;
+            Ok(())
+        })
         .await
 }
 

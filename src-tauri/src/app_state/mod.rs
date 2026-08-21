@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ai::AiProvider;
 use crate::ai::openai::OpenAiCompatible;
+use crate::ai::recognition_queue::RecognitionBookkeeping;
 use crate::database::Database;
 use crate::error::{AppError, Result};
 
@@ -23,6 +24,11 @@ pub struct AppState {
     provider: Arc<dyn AiProvider>,
     /// Cancellation tokens for AI requests still in flight, by request id.
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Recognition queue state: the per-note pending map and the concurrency
+    /// semaphore. The recognizer itself is built per request from the live
+    /// provider config, so this holds only the bookkeeping that must persist
+    /// across requests (dedup, cancellation, concurrency).
+    recognition: Arc<RecognitionBookkeeping>,
 }
 
 impl AppState {
@@ -31,7 +37,13 @@ impl AppState {
             db,
             provider: Arc::new(OpenAiCompatible::new()?),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
+            recognition: Arc::new(RecognitionBookkeeping::default()),
         })
+    }
+
+    /// The shared bookkeeping for the recognition queue.
+    pub fn recognition(&self) -> &Arc<RecognitionBookkeeping> {
+        &self.recognition
     }
 
     pub fn database(&self) -> &Database {
