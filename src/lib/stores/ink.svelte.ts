@@ -29,6 +29,7 @@ import { hitTestStroke } from '$lib/ink/geometry';
 import type { Annotation } from '$lib/types/annotation';
 import type { InkNote, InkStroke, InkTool } from '$lib/types/ink';
 import { notices } from '$lib/stores/notices.svelte';
+import { inkRecognition } from '$lib/stores/ink-recognition.svelte';
 
 /** The colours offered, as semantic ids resolved per theme. */
 export const INK_COLORS = ['ink-primary', 'ink-red', 'ink-blue'] as const;
@@ -110,6 +111,7 @@ class InkStore {
     if (!pageId) {
       this.notes = new Map();
       this.activeAnnotationId = null;
+      inkRecognition.clear();
       return;
     }
 
@@ -123,6 +125,9 @@ class InkStore {
       this.notes = map;
       // Continue drawing into the most recent ink note, if there is one.
       this.activeAnnotationId = notes.length > 0 ? notes[0]!.annotation.id : null;
+      // Load recognition status alongside the strokes, so the Margin can show
+      // each note's recognition state when the Page opens.
+      void inkRecognition.load(pageId);
     } catch (error) {
       if (ticket !== this.token) return;
       this.notes = new Map();
@@ -215,6 +220,10 @@ class InkStore {
     try {
       await service.addInkStrokes(annotationId, [stroke]);
       this.saveError = false;
+      // The ink changed: schedule automatic recognition. The backend debounces,
+      // so a burst of strokes collapses to one job. Recognition never blocks the
+      // save — the stroke is already persisted.
+      void inkRecognition.scheduleAutomatic(annotationId, [stroke]);
     } catch (error) {
       // Keep the stroke visible; flag the error and offer a retry.
       this.saveError = true;
@@ -260,6 +269,9 @@ class InkStore {
     try {
       await service.deleteInkStroke(stroke.id);
       this.saveError = false;
+      // Erasing changed the ink: schedule recognition against the remaining
+      // strokes, so a stale transcript is refreshed.
+      void inkRecognition.scheduleAutomatic(annotationId, this.strokesFor(annotationId));
     } catch (error) {
       // Restore the stroke so the writer does not see it vanish.
       this.addStrokeLocal(annotationId, stroke);

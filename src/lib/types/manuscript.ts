@@ -101,4 +101,7 @@ export type AppSettings = {
   spellcheck: boolean;
   aiEnabled: boolean;
   aiContextBudgetChars: number;
+  inkAutoRecognition: boolean;
+  inkRecognitionModel: string;
+  inkRecognitionLanguage: string;
 };

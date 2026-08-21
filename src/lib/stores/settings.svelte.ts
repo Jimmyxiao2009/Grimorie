@@ -28,7 +28,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   revisionIntervalSeconds: 300,
   spellcheck: true,
   aiEnabled: false,
-  aiContextBudgetChars: 8000
+  aiContextBudgetChars: 8000,
+  inkAutoRecognition: false,
+  inkRecognitionModel: '',
+  inkRecognitionLanguage: 'auto'
 };
 
 class SettingsStore {

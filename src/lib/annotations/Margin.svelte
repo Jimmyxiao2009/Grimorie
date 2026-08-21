@@ -248,6 +248,7 @@
               deleting = true;
             }}
             {onreveal}
+            onconverted={() => margin.refresh()}
           />
         {:else}
           <AnnotationCard

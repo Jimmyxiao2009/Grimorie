@@ -10,9 +10,13 @@
   import InkSurface from '$lib/ink/InkSurface.svelte';
   import Menu from '$lib/components/Menu.svelte';
   import { ink } from '$lib/stores/ink.svelte';
+  import { inkRecognition } from '$lib/stores/ink-recognition.svelte';
+  import { settingsStore } from '$lib/stores/settings.svelte';
+  import { notices } from '$lib/stores/notices.svelte';
   import { relativeTime } from '$lib/utils/format';
   import { anchorOf, type Annotation } from '$lib/types/annotation';
   import type { MenuItem } from '$lib/types/ui';
+  import type { InkRecognition } from '$lib/types/ink';
 
   interface Props {
     annotation: Annotation;
@@ -20,9 +24,10 @@
     onfocus: (id: string) => void;
     ondelete: (annotation: Annotation) => void;
     onreveal: (annotation: Annotation) => void;
+    onconverted?: () => void;
   }
 
-  let { annotation, focused, onfocus, ondelete, onreveal }: Props = $props();
+  let { annotation, focused, onfocus, ondelete, onreveal, onconverted }: Props = $props();
 
   const anchor = $derived(anchorOf(annotation));
   const stale = $derived(annotation.status === 'stale');
@@ -30,7 +35,130 @@
   const strokeCount = $derived(strokes.length);
   const active = $derived(ink.penMode);
 
+  const recognition = $derived<InkRecognition | null>(inkRecognition.forAnnotation(annotation.id));
+
+  /** Whether the note has a transcript to inspect, search, or convert. */
+  const hasTranscript = $derived(
+    recognition !== null && !!recognition.recognizedText && recognition.recognizedText.length > 0
+  );
+
+  /** A short, unobtrusive status label for the metadata row. */
+  const statusLabel = $derived.by(() => {
+    if (!recognition) return '';
+    switch (recognition.status) {
+      case 'recognizing':
+        return 'Recognizing…';
+      case 'recognized':
+        return recognition.transcriptSource === 'user-edited' ? 'Recognized · edited' : 'Recognized';
+      case 'failed':
+        return 'Recognition failed';
+      case 'stale':
+        return 'Re-recognizing…';
+      case 'pending':
+        return 'Recognizing…';
+      case 'disabled':
+        return '';
+      default:
+        return '';
+    }
+  });
+
+  let showTranscript = $state(false);
+  let editingTranscript = $state(false);
+  let transcriptDraft = $state('');
+
+  function toggleTranscript() {
+    showTranscript = !showTranscript;
+    if (!showTranscript) editingTranscript = false;
+  }
+
+  function beginEditTranscript() {
+    transcriptDraft = recognition?.recognizedText ?? '';
+    editingTranscript = true;
+  }
+
+  async function saveTranscript() {
+    const text = transcriptDraft.trim();
+    if (!text) {
+      editingTranscript = false;
+      return;
+    }
+    try {
+      await inkRecognition.editTranscript(annotation.id, text);
+      editingTranscript = false;
+    } catch (error) {
+      notices.failure(error);
+    }
+  }
+
+  async function copyTranscript() {
+    const text = recognition?.recognizedText ?? '';
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      notices.info('Transcript copied.');
+    } catch {
+      notices.failure(new Error('Grimoire could not copy the transcript.'));
+    }
+  }
+
+  async function recognizeNow() {
+    try {
+      await inkRecognition.recognizeNow(annotation.id, strokes);
+      showTranscript = true;
+    } catch (error) {
+      notices.failure(error);
+    }
+  }
+
+  async function convertToText() {
+    try {
+      await inkRecognition.convertToText(annotation.id);
+      notices.info('Converted to a text note. The handwriting is kept.');
+      onconverted?.();
+    } catch (error) {
+      notices.failure(error);
+    }
+  }
+
+  const canRecognize = $derived(
+    settingsStore.settings.aiEnabled && strokeCount > 0
+  );
+
   const actions = $derived<MenuItem[]>([
+    {
+      id: 'recognize',
+      label: hasTranscript ? 'Recognize again' : 'Recognize handwriting',
+      icon: 'sparkle',
+      disabled: !canRecognize,
+      select: recognizeNow
+    },
+    {
+      id: 'show-transcript',
+      label: showTranscript ? 'Hide recognized text' : 'Show recognized text',
+      disabled: !hasTranscript,
+      select: toggleTranscript
+    },
+    { kind: 'separator', id: 'sep-1' },
+    {
+      id: 'edit-transcript',
+      label: 'Edit transcript',
+      disabled: !hasTranscript,
+      select: beginEditTranscript
+    },
+    {
+      id: 'copy-transcript',
+      label: 'Copy transcript',
+      disabled: !hasTranscript,
+      select: copyTranscript
+    },
+    {
+      id: 'convert',
+      label: 'Convert to Text Note',
+      disabled: !hasTranscript,
+      select: convertToText
+    },
+    { kind: 'separator', id: 'sep-2' },
     { id: 'delete', label: 'Delete ink note', icon: 'trash', danger: true, select: () => ondelete(annotation) }
   ]);
 
@@ -94,7 +222,40 @@
         ? `${strokeCount} stroke${strokeCount === 1 ? '' : 's'}`
         : 'empty'} · {relativeTime(annotation.updatedAt)}
     </span>
+    {#if statusLabel}
+      <span class="recognition-status" class:failed={recognition?.status === 'failed'}>
+        {statusLabel}
+      </span>
+    {/if}
   </button>
+
+  {#if showTranscript && recognition?.recognizedText}
+    <div class="transcript" class:hidden={!focused && !showTranscript}>
+      {#if editingTranscript}
+        <textarea
+          class="transcript-edit"
+          bind:value={transcriptDraft}
+          rows="3"
+          aria-label="Edit the recognized transcript"
+        ></textarea>
+        <div class="transcript-actions">
+          <button type="button" class="ta" onclick={() => (editingTranscript = false)}>Cancel</button>
+          <button type="button" class="ta primary" onclick={saveTranscript}>Save</button>
+        </div>
+      {:else}
+        <p class="transcript-text selectable">{recognition.recognizedText}</p>
+        {#if recognition.error}
+          <p class="transcript-error">{recognition.error}</p>
+        {/if}
+        <div class="transcript-actions">
+          <button type="button" class="ta" onclick={beginEditTranscript}>Edit</button>
+          <button type="button" class="ta" onclick={copyTranscript}>Copy</button>
+          <button type="button" class="ta" onclick={recognizeNow}>Recognize again</button>
+          <button type="button" class="ta" onclick={convertToText}>Convert to Note</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </article>
 
 <style>
@@ -184,5 +345,74 @@
   .when {
     /* tabular keeps the stroke count from shifting width as it changes. */
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The recognition status sits at the right of the metadata row, quiet unless
+     it failed — a failure keeps a subtle retry affordance visible. */
+  .recognition-status {
+    margin-left: auto;
+    color: var(--text-tertiary);
+  }
+
+  .recognition-status.failed {
+    color: var(--state-warning);
+  }
+
+  /* The transcript is a lightweight expandable panel, not a duplicate typed
+     paragraph under every note. It appears on demand and stays secondary to the
+     handwriting, which is always what the note looks like. */
+  .transcript {
+    margin: var(--space-1) var(--space-1) 0 calc(var(--space-3) + var(--space-1));
+    padding: var(--space-2) var(--space-2) var(--space-1);
+    border-left: 2px solid var(--border-default);
+    background: var(--surface-page);
+    border-radius: var(--radius-sm);
+  }
+
+  .transcript-text {
+    font-family: var(--font-manuscript);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    margin: 0 0 var(--space-1);
+  }
+
+  .transcript-error {
+    font-size: var(--text-2xs);
+    color: var(--state-warning);
+    margin: 0 0 var(--space-1);
+  }
+
+  .transcript-edit {
+    width: 100%;
+    font-family: var(--font-manuscript);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+    background: var(--surface-base);
+    border: var(--border-width) solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    resize: vertical;
+  }
+
+  .transcript-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .ta {
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+  }
+
+  .ta:hover {
+    color: var(--text-secondary);
+  }
+
+  .ta.primary {
+    color: var(--accent);
   }
 </style>

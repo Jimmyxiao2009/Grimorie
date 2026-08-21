@@ -40,3 +40,39 @@ export type InkNote = {
   annotation: Annotation;
   strokes: InkStroke[];
 };
+
+/**
+ * Recognition status, mirroring `RecognitionStatus` in Rust.
+ *
+ * `recognizing` is transient: it only exists while a job runs, and is repaired
+ * to `pending` on startup if the app exited under it.
+ */
+export type RecognitionStatus =
+  | 'pending'
+  | 'recognizing'
+  | 'recognized'
+  | 'failed'
+  | 'stale'
+  | 'disabled';
+
+/** Whether a transcript came from a recognizer or the writer's own correction. */
+export type TranscriptSource = 'recognized' | 'user-edited';
+
+/** One note's recognition state, mirroring `InkRecognitionView` in Rust. */
+export type InkRecognition = {
+  annotationId: string;
+  status: RecognitionStatus;
+  recognizedText: string | null;
+  confidence: number | null;
+  provider: string | null;
+  model: string | null;
+  language: string | null;
+  transcriptSource: TranscriptSource;
+  contentHash: string | null;
+  error: string | null;
+  recognizedAt: string | null;
+  updatedAt: string;
+};
+
+/** A language hint: `auto` or a BCP-47 tag. */
+export type LanguageHint = { auto: true } | { language: string };

@@ -27,6 +27,7 @@
 
   import { tick } from 'svelte';
   import { ink } from '$lib/stores/ink.svelte';
+  import { inkRecognition } from '$lib/stores/ink-recognition.svelte';
   import { appearance } from '$lib/design/theme.svelte';
   import {
     denormalizePoint,
@@ -68,8 +69,12 @@
     if (!svg) return;
     const observer = new ResizeObserver(() => {
       surfaceWidth = svg!.clientWidth;
+      // Keep the recognition store's rasterizer in step with the live surface
+      // width, so a snapshot's denormalised x coordinates match the strokes.
+      inkRecognition.setSurfaceWidth(surfaceWidth);
     });
     surfaceWidth = svg.clientWidth;
+    inkRecognition.setSurfaceWidth(surfaceWidth);
     observer.observe(svg);
     return () => observer.disconnect();
   });

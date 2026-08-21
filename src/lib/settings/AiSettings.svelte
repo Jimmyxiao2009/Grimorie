@@ -156,6 +156,62 @@
 </section>
 
 <section class="section">
+  <h2>Handwriting recognition</h2>
+  <p class="preamble">
+    When this is on, Grimoire quietly reads back what you write by hand, so handwritten margin notes
+    can be searched and read by AI. The handwriting itself never changes — recognition is a derived
+    transcript attached to the note. You can always recognise a note by hand, even with this off.
+  </p>
+
+  <SettingRow
+    label="Automatically recognise handwriting"
+    hint="Off by default. When on, a note is recognised shortly after you finish writing, using your configured AI provider."
+  >
+    {#snippet control()}
+      <Toggle
+        checked={settingsStore.settings.inkAutoRecognition}
+        label="Automatically recognise handwriting"
+        onchange={(checked) => settingsStore.update({ inkAutoRecognition: checked })}
+      />
+    {/snippet}
+  </SettingRow>
+
+  <SettingRow
+    label="Recognition model"
+    hint="Leave blank to use your provider's model. Set a vision-capable model (e.g. gpt-4o) to use it for handwriting specifically."
+  >
+    {#snippet control()}
+      <input
+        type="text"
+        class="number"
+        value={settingsStore.settings.inkRecognitionModel}
+        placeholder="Use provider model"
+        aria-label="Recognition model"
+        onchange={(event) =>
+          settingsStore.update({ inkRecognitionModel: event.currentTarget.value })}
+      />
+    {/snippet}
+  </SettingRow>
+
+  <SettingRow
+    label="Recognition language"
+    hint="Auto detects the language. Set a tag like zh-CN or en-US when you write mostly in one language."
+  >
+    {#snippet control()}
+      <input
+        type="text"
+        class="number"
+        value={settingsStore.settings.inkRecognitionLanguage}
+        placeholder="auto"
+        aria-label="Recognition language"
+        onchange={(event) =>
+          settingsStore.update({ inkRecognitionLanguage: event.currentTarget.value })}
+      />
+    {/snippet}
+  </SettingRow>
+</section>
+
+<section class="section">
   <h3 class="eyebrow">Provider</h3>
 
   {#if ai.providers.length === 0}
