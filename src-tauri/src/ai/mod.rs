@@ -17,8 +17,10 @@
 
 pub mod apply;
 pub mod context;
+pub mod ink_recognition;
 pub mod openai;
 pub mod prompts;
+pub mod recognizers;
 
 #[cfg(test)]
 mod transport_tests;
@@ -36,7 +38,95 @@ use crate::error::Result;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiMessage {
     pub role: AiRole,
-    pub content: String,
+    pub content: AiContent,
+}
+
+/// The content of a message: plain text, or a sequence of typed parts.
+///
+/// Text-only messages stay as [`AiContent::Text`] and serialise to a bare
+/// string — the shape every chat-completions server expects, and the one every
+/// existing request uses. Multimodal messages — a vision model reading a
+/// handwriting raster — use [`AiContent::Parts`] so an image can travel beside
+/// the instruction that asks for its transcript.
+///
+/// This is a general content model, not a handwriting-specific one: the same
+/// `Image` part will carry a manuscript excerpt when a future action asks a
+/// model to read a scanned page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AiContent {
+    Text(String),
+    Parts(Vec<AiContentPart>),
+}
+
+/// One piece of a multimodal message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AiContentPart {
+    Text {
+        text: String,
+    },
+    /// An inline image, base64-encoded with its MIME type. Sent to vision-capable
+    /// models at request time and never persisted, logged, or returned across IPC.
+    ImageUrl {
+        image_url: AiImage,
+    },
+}
+
+/// The image payload of an [`AiContentPart::ImageUrl`], in the OpenAI-compatible
+/// data-URL form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiImage {
+    /// `data:{mime};base64,{data}`.
+    pub url: String,
+}
+
+impl AiContent {
+    /// Builds plain-text content.
+    pub fn text(value: impl Into<String>) -> Self {
+        AiContent::Text(value.into())
+    }
+
+    /// Builds multimodal content from a text instruction and one image.
+    pub fn text_and_image(instruction: impl Into<String>, mime: &str, data_base64: &str) -> Self {
+        AiContent::Parts(vec![
+            AiContentPart::Text {
+                text: instruction.into(),
+            },
+            AiContentPart::ImageUrl {
+                image_url: AiImage {
+                    url: format!("data:{mime};base64,{data_base64}"),
+                },
+            },
+        ])
+    }
+
+    /// The approximate character count of the text this content carries, for log
+    /// lines that must not include the manuscript or the image bytes.
+    pub fn text_chars(&self) -> usize {
+        match self {
+            AiContent::Text(text) => text.chars().count(),
+            AiContent::Parts(parts) => parts
+                .iter()
+                .map(|part| match part {
+                    AiContentPart::Text { text } => text.chars().count(),
+                    AiContentPart::ImageUrl { .. } => 0,
+                })
+                .sum(),
+        }
+    }
+}
+
+impl From<String> for AiContent {
+    fn from(value: String) -> Self {
+        AiContent::Text(value)
+    }
+}
+
+impl From<&str> for AiContent {
+    fn from(value: &str) -> Self {
+        AiContent::Text(value.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,7 +167,10 @@ impl AiRequest {
             "model={} messages={} chars={}",
             self.model,
             self.messages.len(),
-            self.messages.iter().map(|m| m.content.len()).sum::<usize>()
+            self.messages
+                .iter()
+                .map(|m| m.content.text_chars())
+                .sum::<usize>()
         )
     }
 }

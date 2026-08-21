@@ -228,11 +228,11 @@ fn prepare(
         messages: vec![
             AiMessage {
                 role: AiRole::System,
-                content: system,
+                content: system.into(),
             },
             AiMessage {
                 role: AiRole::User,
-                content: context::render(&built),
+                content: context::render(&built).into(),
             },
         ],
         temperature: profile.temperature.unwrap_or(provider.temperature) as f32,

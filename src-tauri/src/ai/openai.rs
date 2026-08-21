@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, ErrorCode, Result};
 
-use super::{AiChunk, AiProvider, AiRequest, AiStream};
+use super::{AiChunk, AiContent, AiContentPart, AiProvider, AiRequest, AiStream};
 
 /// How long to wait for the first byte. Generous, because a large context and a
 /// cold model can take a while, but not unbounded.
@@ -58,7 +58,18 @@ struct ChatRequest<'a> {
 #[derive(Serialize)]
 struct ChatMessage<'a> {
     role: &'a str,
-    content: &'a str,
+    content: ChatContent<'a>,
+}
+
+/// The wire form of [`AiContent`]: a bare string for text, or an array of typed
+/// parts for multimodal. Serialised with `#[serde(untagged)]` so a text message
+/// goes out as `"content": "..."` — the shape every server expects — and a
+/// multimodal one as `"content": [{"type":"text",...},{"type":"image_url",...}]`.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ChatContent<'a> {
+    Text(&'a str),
+    Parts(&'a [AiContentPart]),
 }
 
 /// Joins a base URL to the completions path, tolerating either form of base.
@@ -146,7 +157,10 @@ impl AiProvider for OpenAiCompatible {
                     .iter()
                     .map(|message| ChatMessage {
                         role: message.role.as_str(),
-                        content: &message.content,
+                        content: match &message.content {
+                            AiContent::Text(text) => ChatContent::Text(text),
+                            AiContent::Parts(parts) => ChatContent::Parts(parts),
+                        },
                     })
                     .collect(),
                 temperature: request.temperature,
