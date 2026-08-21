@@ -101,6 +101,41 @@ pub struct ContextSources<'a> {
     pub ink_notes: &'a [InkNoteContextOwned],
 }
 
+/// The most of a request's budget that handwritten margin notes may take.
+///
+/// A quarter. Enough that a Page's marginalia is genuinely heard, bounded
+/// enough that it cannot displace the prose the writer is asking about.
+const INK_NOTE_BUDGET_SHARE: usize = 4;
+
+/// Selects the handwritten notes that fit an allowance.
+///
+/// Whole notes only. Half a transcript is worse than no transcript: a model
+/// given "the pacing here is far too" will treat the fragment as the writer's
+/// complete thought and answer the wrong question.
+///
+/// Returns the notes taken, whether any were left out, and how many characters
+/// they account for.
+fn take_ink_notes(
+    notes: &[InkNoteContextOwned],
+    allowance: usize,
+) -> (Vec<InkNoteContextOwned>, bool, usize) {
+    let mut taken = Vec::new();
+    let mut used = 0usize;
+    let mut trimmed = false;
+
+    for note in notes {
+        let cost = note.transcript.chars().count() + note.anchored_text.chars().count();
+        if used + cost > allowance {
+            trimmed = true;
+            continue;
+        }
+        used += cost;
+        taken.push(note.clone());
+    }
+
+    (taken, trimmed, used)
+}
+
 /// Takes characters from the end of a string.
 fn tail(text: &str, max_chars: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
@@ -139,6 +174,20 @@ pub fn build(
     // line are accounted for.
     let reserved = selection.chars().count() + where_from.chars().count();
     let remaining = budget.saturating_sub(reserved);
+
+    // Handwritten notes are part of what gets sent, so they are part of what
+    // gets budgeted. They used to be attached whole, after the budget had been
+    // spent — which meant a Page with a heavily annotated margin could push the
+    // request past its limit, and, worse, that `chars_sent` understated what
+    // left the machine. That number is what the writer is shown before they
+    // approve a request.
+    //
+    // They take a bounded share rather than competing freely with the prose:
+    // marginalia should never crowd out the passage being asked about, and the
+    // passage should not crowd out every note.
+    let ink_allowance = remaining / INK_NOTE_BUDGET_SHARE;
+    let (ink_notes, ink_trimmed, ink_chars) = take_ink_notes(sources.ink_notes, ink_allowance);
+    let remaining = remaining.saturating_sub(ink_chars);
 
     let (surrounding, trimmed) = match policy {
         ContextPolicy::Selection => {
@@ -190,7 +239,8 @@ pub fn build(
         }
     };
 
-    let chars_sent = selection.chars().count() + surrounding.chars().count();
+    let chars_sent = selection.chars().count() + surrounding.chars().count() + ink_chars;
+    let trimmed = trimmed || ink_trimmed;
 
     let summary = if selection.is_empty() {
         format!("Sends this Page ({chars_sent} characters) to your AI provider.")
@@ -215,8 +265,6 @@ pub fn build(
     } else {
         summary
     };
-
-    let ink_notes = sources.ink_notes.to_vec();
 
     BuiltContext {
         selection,
@@ -439,6 +487,139 @@ mod tests {
         );
         assert_eq!(built.ink_notes.len(), 2);
         assert_eq!(built.ink_notes[0].transcript, "这里的转折太突然了");
+    }
+
+    #[test]
+    fn ink_notes_count_towards_what_the_writer_is_told_is_sent() {
+        // chars_sent is the number shown before a request is approved. Ink
+        // transcripts used to be attached after the budget was spent, so the
+        // writer was told a figure that excluded them.
+        let (from, to) = offsets("the carters said");
+        let ink = [InkNoteContextOwned {
+            transcript: "这里的转折太突然了".into(),
+            anchored_text: String::new(),
+        }];
+
+        let without = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &[],
+            },
+            ContextPolicy::Selection,
+            8000,
+        );
+        let with = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            8000,
+        );
+
+        assert_eq!(
+            with.chars_sent,
+            without.chars_sent + "这里的转折太突然了".chars().count()
+        );
+    }
+
+    #[test]
+    fn a_heavily_annotated_page_does_not_blow_the_budget() {
+        // Every note on a Page was attached whole, so a margin full of
+        // handwriting could push a request past its limit unnoticed.
+        let (from, to) = offsets("the carters said");
+        let ink: Vec<InkNoteContextOwned> = (0..200)
+            .map(|i| InkNoteContextOwned {
+                transcript: format!("a fairly long handwritten remark number {i}"),
+                anchored_text: "the carters said".into(),
+            })
+            .collect();
+
+        let built = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            1000,
+        );
+
+        assert!(built.ink_notes.len() < ink.len(), "nothing was left out");
+        assert!(built.chars_sent <= 1000, "sent {} chars", built.chars_sent);
+        // And the writer is told that something was dropped.
+        assert!(built.trimmed);
+        assert!(built.summary.contains("left out"));
+    }
+
+    #[test]
+    fn marginalia_never_crowds_out_the_passage_being_asked_about() {
+        // The selection is the question. A Page whose margin holds more
+        // handwriting than the budget must still carry the passage in full.
+        let (from, to) = offsets("the carters said");
+        let ink: Vec<InkNoteContextOwned> = (0..200)
+            .map(|i| InkNoteContextOwned {
+                transcript: format!("handwritten remark number {i}"),
+                anchored_text: String::new(),
+            })
+            .collect();
+
+        let built = build(
+            ContextSources {
+                volume_title: "The Salt Road",
+                chapter_title: "Chapter I",
+                page_title: "The Crows",
+                page_text: PAGE,
+                from,
+                to,
+                neighbours: &[],
+                ink_notes: &ink,
+            },
+            ContextPolicy::Selection,
+            600,
+        );
+
+        assert_eq!(built.selection, "the carters said");
+    }
+
+    #[test]
+    fn a_note_is_taken_whole_or_not_at_all() {
+        // Half a transcript is worse than none: a model given "the pacing here
+        // is far too" answers the fragment as though it were the whole thought.
+        let long = "x".repeat(400);
+        let notes = [
+            InkNoteContextOwned {
+                transcript: "short one".into(),
+                anchored_text: String::new(),
+            },
+            InkNoteContextOwned {
+                transcript: long.clone(),
+                anchored_text: String::new(),
+            },
+        ];
+
+        let (taken, trimmed, used) = take_ink_notes(&notes, 100);
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].transcript, "short one");
+        assert!(trimmed);
+        assert_eq!(used, "short one".chars().count());
     }
 
     #[test]
