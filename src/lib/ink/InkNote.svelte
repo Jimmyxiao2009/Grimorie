@@ -237,6 +237,21 @@
     {/if}
   </button>
 
+  <!-- A failure needs to say why and offer the way out. This sat inside the
+       transcript panel, which only renders when there is a transcript — so a
+       note that failed on its first recognition showed the words "Recognition
+       failed" and nothing else, anywhere. -->
+  {#if recognition?.status === 'failed' && !active}
+    <div class="failure">
+      <p class="failure-reason">
+        {recognition.error ?? 'Grimoire could not recognise this handwriting.'}
+      </p>
+      <button type="button" class="ta" onclick={recognizeNow} disabled={!canRecognize}>
+        Try again
+      </button>
+    </div>
+  {/if}
+
   {#if showTranscript && recognition?.recognizedText}
     <div class="transcript" class:hidden={!focused && !showTranscript}>
       {#if editingTranscript}
@@ -363,6 +378,23 @@
   }
 
   .recognition-status.failed {
+    color: var(--state-warning);
+  }
+
+  /* A failure is quiet but legible: one line of reason and a retry, in the
+     warning colour the status label already uses. It sits where the transcript
+     would, so a note never has both. */
+  .failure {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: var(--space-1) var(--space-1) 0 calc(var(--space-3) + var(--space-1));
+  }
+
+  .failure-reason {
+    flex: 1;
+    margin: 0;
+    font-size: var(--text-2xs);
     color: var(--state-warning);
   }
 
