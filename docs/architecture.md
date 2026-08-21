@@ -139,6 +139,51 @@ The active stroke lives in component-local state, not the global store, so a hun
 stroke costs one store update. Ink undo/redo is a separate history from the editor's,
 routed by whether pen mode is active.
 
+### Ink intelligence (handwriting recognition)
+
+Recognition is a **derived layer** above the strokes, never a replacement for them. The
+hierarchy is strict and uncollapsed:
+
+```
+Ink            →  original human handwriting (authoritative)
+Recognition    →  machine-readable transcript (derived)
+AI             →  reasoning using manuscript + annotations
+```
+
+A recognition error can never destroy human input. The vector strokes remain the source of
+truth; if recognition metadata is lost, the handwritten note still displays exactly as written.
+
+The transcript lives in a separate `ink_recognition` table — one row per ink annotation,
+cascading from the annotation on delete — carrying status, transcript, optional real
+confidence, provider/model, and a `content_hash` of the strokes it was generated from. The
+hash is an order-independent, geometry-only FNV-1a over the strokes (ids and timestamps
+excluded), so a result is tied to the exact ink state it was generated against. When strokes
+are added or erased, the row is invalidated to `stale`; the old transcript is kept visible
+while a refresh runs, never erased.
+
+The `InkRecognizer` trait is provider-independent and accepts either raw vectors or a
+rendered image, so a future native Windows recognizer need not take PNG. The MVP
+`VisionRecognizer` reuses the shared OpenAI-compatible transport: strokes are rasterised
+(theme-independent — light background, dark ink, cropped to bounds with padding, capped at
+2048px) and sent to a vision model with a narrow transcribe-only prompt that forbids
+interpretation. The raster is an input artifact, never persisted.
+
+A recognition queue (`RecognitionBookkeeping` in `AppState`) owns the debounce (1.5s), dedup
+(one job per note; a reschedule cancels its predecessor), a 2-job concurrency limit, and
+stale rejection — before committing, a job re-reads the live strokes and discards its result
+if the hash has changed. A `user-edited` transcript is never overwritten by an automatic
+recognition; only an explicit "recognize again" does. Automatic recognition is gated by
+`ai_enabled` and `ink_auto_recognition` (off by default — ink is never sent to a remote
+model silently); a manual recognize bypasses both.
+
+Recognised transcripts participate in full-text search (indexed as `EntityKind::Ink`,
+searchable for CJK and mixed scripts) and in AI context (rendered as `[Handwritten note]`
+blocks with anchored prose, never raw coordinates). "Convert to Text Note" copies the
+transcript into a typed annotation recording `source_ink_annotation_id` for lineage, and
+keeps the ink. A `recognizing` row left by an abnormal exit is repaired to `pending` on
+startup, so no note is stuck behind a dead job.
+
+
 ## 4. Responsive information architecture
 
 Breakpoints change *what exists*, not merely how wide it is.
