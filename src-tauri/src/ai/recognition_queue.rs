@@ -238,6 +238,16 @@ impl RecognitionBookkeeping {
                 }
             };
 
+            // Automatic jobs share the concurrency limit with manual ones. The
+            // permit is taken after the debounce, not before, so a waiting job
+            // does not hold a slot it is not using.
+            let _permit = match bookkeeping.concurrency.acquire().await {
+                Ok(permit) => permit,
+                // The semaphore is only ever closed on shutdown; there is
+                // nothing useful to do but stop.
+                Err(_) => return,
+            };
+
             let result = run_recognition(
                 &state,
                 &recognizer,
@@ -775,6 +785,91 @@ mod tests {
             *seen.lock().unwrap(),
             vec![RecognitionStatus::Recognizing, RecognitionStatus::Failed]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn automatic_jobs_respect_the_concurrency_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        bookkeeping.set_debounce(Duration::from_millis(10)).await;
+
+        // Six notes, all scheduled at once — the shape of a writer filling a
+        // margin, or a page switch landing on several handwritten notes.
+        let mut annotations = Vec::new();
+        {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            for i in 0..6 {
+                let annotation = repositories::ink::create_ink_annotation(&conn, page.id)
+                    .unwrap()
+                    .id;
+                let points = [(0.1, 5.0 + i as f32), (0.2, 6.0 + i as f32)];
+                repositories::ink::add_strokes(&conn, annotation, &[stroke(&points)]).unwrap();
+                annotations.push((annotation, points));
+            }
+        }
+
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let recognizer: Arc<dyn InkRecognizer> = {
+            let in_flight = Arc::clone(&in_flight);
+            let peak = Arc::clone(&peak);
+            Arc::new(MockRecognizer::responder(move |_| {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                // Held long enough that a second wave would overlap if the
+                // limit were not enforced.
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(InkRecognitionResult {
+                    text: "transcript".into(),
+                    confidence: None,
+                    language: None,
+                    provider: "mock".into(),
+                    model: "mock-1".into(),
+                })
+            }))
+        };
+
+        for (annotation, points) in &annotations {
+            let recognizer = Arc::clone(&recognizer);
+            bookkeeping
+                .schedule_auto(
+                    Arc::clone(&state),
+                    *annotation,
+                    snapshot(points),
+                    async move { Ok(recognizer) },
+                )
+                .await;
+        }
+
+        // Long enough for every job to have run through the limit.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(
+            peak.load(Ordering::SeqCst) <= MAX_CONCURRENCY,
+            "automatic recognition ran {} jobs at once, limit is {}",
+            peak.load(Ordering::SeqCst),
+            MAX_CONCURRENCY
+        );
+        // And the work still finished — the limit throttles, it does not drop.
+        let recognized = {
+            let conn = state.database().get().unwrap();
+            annotations
+                .iter()
+                .filter(|(id, _)| {
+                    repositories::ink_recognition::get(&conn, *id)
+                        .unwrap()
+                        .is_some_and(|r| r.status == RecognitionStatus::Recognized)
+                })
+                .count()
+        };
+        assert_eq!(recognized, annotations.len());
     }
 
     #[tokio::test]
