@@ -116,6 +116,29 @@ the source text no longer matches, the patch is refused and the suggestion is ma
 stale; the user may then inspect, re-evaluate, or dismiss it. There is no code path that
 applies a suggestion to text it was not computed against.
 
+### Ink (handwritten annotations)
+
+Ink is an **annotation kind**, not a parallel feature. A handwritten margin note is an
+`annotations` row of kind `ink` whose vector content — the strokes — lives in a separate
+`ink_strokes` table linked by `annotation_id` with `ON DELETE CASCADE`. Reusing the
+annotation system gives ink the anchoring, staleness, and cascade behaviour the Margin
+already has; whole-page ink never goes stale, and anchored ink re-locates with its text
+on every save. The manuscript's ProseMirror document is never touched by ink.
+
+Strokes are **vector data**, never screenshots. Each stroke is one JSON blob of points
+(versioned in an envelope for forward migration), written once on `pointerup` — never per
+point. Points are stored in a **logical, surface-relative** coordinate space so
+handwriting does not drift on resize: `x` is normalised to `[0, 1]` against the ink
+surface's width, and `y` is an absolute pixel offset from the surface top. Pressure and
+timestamps are kept when the hardware offers them; tilt is not.
+
+Rendering is SVG, one path per stroke with quadratic-Bézier midpoint smoothing, never one
+element per point. Highlighters render behind pens. Input uses Pointer Events with strict
+`pointerType` gating: pen and mouse draw, touch never draws — a finger always scrolls.
+The active stroke lives in component-local state, not the global store, so a hundred-point
+stroke costs one store update. Ink undo/redo is a separate history from the editor's,
+routed by whether pen mode is active.
+
 ## 4. Responsive information architecture
 
 Breakpoints change *what exists*, not merely how wide it is.
