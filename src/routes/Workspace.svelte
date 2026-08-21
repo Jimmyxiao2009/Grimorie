@@ -29,6 +29,7 @@
   import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import { ink } from '$lib/stores/ink.svelte';
+  import { inkRecognition } from '$lib/stores/ink-recognition.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
   import { count } from '$lib/utils/format';
@@ -81,6 +82,10 @@
       void ai.loadSuggestions(workspace.activePageId);
     });
 
+    // Background handwriting recognition reports through an event, so the
+    // Margin follows a job to its end without polling or a Page reload.
+    const stopInkRecognition = inkRecognition.start();
+
     // A save must not be left waiting on a debounce timer when the writer
     // switches away from the window, closes the lid, or shuts down.
     const flush = () => void autosave.flush();
@@ -99,6 +104,7 @@
       ink.clear();
       bookmarks.clear();
       stopAi();
+      stopInkRecognition();
       ai.clear();
     };
   });

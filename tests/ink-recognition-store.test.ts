@@ -50,6 +50,21 @@ vi.mock('$lib/stores/notices.svelte', () => ({
   notices: { failure: vi.fn(), info: vi.fn(), dismiss: vi.fn(), clear: vi.fn(), items: [] }
 }));
 
+// The event bridge, captured so a test can deliver a backend status update
+// without a Tauri host. `isDesktop` is forced true so `start()` subscribes.
+let statusHandler: ((event: { payload: unknown }) => void) | null = null;
+const unlistenSpy = vi.fn();
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+    if (name === 'ink:recognition-status') statusHandler = handler;
+    return Promise.resolve(unlistenSpy);
+  }
+}));
+vi.mock('$lib/services/ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/services/ipc')>()),
+  isDesktop: true
+}));
+
 import { inkRecognition } from '$lib/stores/ink-recognition.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { InkRecognition, InkStroke } from '$lib/types/ink';
@@ -170,5 +185,62 @@ describe('ink recognition store', () => {
     // The status is not flipped to pending — the writer's edit wins.
     expect(inkRecognition.forAnnotation('note-1')?.transcriptSource).toBe('user-edited');
     expect(inkRecognition.forAnnotation('note-1')?.status).toBe('recognized');
+  });
+});
+
+describe('ink recognition store — live status', () => {
+  it('applies a backend status update without a refetch', async () => {
+    recognitionForPage.mockResolvedValue([{ ...recognized('draft'), status: 'recognizing' }]);
+    await inkRecognition.load('page-1');
+    const stop = inkRecognition.start();
+
+    expect(inkRecognition.forAnnotation('note-1')?.status).toBe('recognizing');
+
+    // A background job finishes. Nothing is re-fetched.
+    statusHandler?.({ payload: recognized('the finished transcript') });
+
+    expect(inkRecognition.forAnnotation('note-1')?.status).toBe('recognized');
+    expect(inkRecognition.forAnnotation('note-1')?.recognizedText).toBe(
+      'the finished transcript'
+    );
+    expect(recognitionForPage).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('carries a failure through to the note', async () => {
+    recognitionForPage.mockResolvedValue([{ ...recognized('draft'), status: 'recognizing' }]);
+    await inkRecognition.load('page-1');
+    const stop = inkRecognition.start();
+
+    statusHandler?.({
+      payload: { ...recognized('draft'), status: 'failed', error: 'no network' }
+    });
+
+    const row = inkRecognition.forAnnotation('note-1');
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toBe('no network');
+    stop();
+  });
+
+  it('ignores an update for a note that is not on the open page', async () => {
+    recognitionForPage.mockResolvedValue([recognized('mine')]);
+    await inkRecognition.load('page-1');
+    const stop = inkRecognition.start();
+
+    statusHandler?.({
+      payload: { ...recognized('someone else'), annotationId: 'note-on-another-page' }
+    });
+
+    expect(inkRecognition.forAnnotation('note-on-another-page')).toBeNull();
+    expect(inkRecognition.forAnnotation('note-1')?.recognizedText).toBe('mine');
+    stop();
+  });
+
+  it('unsubscribes on teardown', async () => {
+    const stop = inkRecognition.start();
+    // The listen promise resolves on the microtask queue.
+    await Promise.resolve();
+    stop();
+    expect(unlistenSpy).toHaveBeenCalled();
   });
 });

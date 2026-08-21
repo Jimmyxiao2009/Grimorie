@@ -87,7 +87,20 @@ pub fn run() {
                 }
             }
 
-            app.manage(AppState::new(db)?);
+            let state = AppState::new(db)?;
+
+            // Recognition runs in spawned tasks with no caller to return to, so
+            // it reports progress through a sink instead. Installing it here —
+            // once, at setup — is what lets the Margin follow a background job
+            // live rather than polling or waiting for a Page reload.
+            let handle = app.handle().clone();
+            state
+                .recognition()
+                .set_status_sink(std::sync::Arc::new(move |record| {
+                    commands::ink_recognition::emit_status(&handle, record);
+                }));
+
+            app.manage(state);
 
             Ok(())
         })

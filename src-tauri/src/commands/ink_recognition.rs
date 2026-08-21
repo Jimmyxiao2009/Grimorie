@@ -108,6 +108,22 @@ impl InkRecognitionView {
     }
 }
 
+/// The event a view listens on to follow a recognition job.
+///
+/// One event carries one note's whole recognition row, so a listener replaces
+/// state rather than patching it — there is no ordering hazard if two updates
+/// arrive close together.
+pub const STATUS_EVENT: &str = "ink:recognition-status";
+
+/// Emits a recognition row to the frontend. Installed as the queue's status
+/// sink at startup, so automatic and manual jobs report identically.
+///
+/// A failed emit is ignored: the window may be closing, and a recognition that
+/// already persisted must not be treated as failed because nobody was listening.
+pub fn emit_status(app: &AppHandle, record: InkRecognitionRecord) {
+    let _ = app.emit(STATUS_EVENT, InkRecognitionView::from_record(record));
+}
+
 /// Builds a vision recognizer from the live provider config, or returns an error
 /// explaining what is missing. Used by both automatic and manual recognition, so
 /// the credential resolution path is identical.
@@ -218,11 +234,12 @@ pub async fn ink_recognize(
 /// Runs recognition immediately, ignoring the debounce and the automatic
 /// settings. Used by the explicit "Recognize handwriting" action.
 ///
-/// Returns the transcript so the frontend can show it at once, and emits an
-/// `ink:recognized` event so any other view of the note updates.
+/// Returns the committed row so the caller can show the transcript at once. The
+/// queue's status sink has already published the same row on
+/// [`STATUS_EVENT`], so any other open view updates without a second,
+/// differently-shaped event to reconcile.
 #[tauri::command]
 pub async fn ink_recognize_manual(
-    app: AppHandle,
     state: State<'_, AppState>,
     annotation_id: String,
     snapshot: InkSnapshotInput,
@@ -239,7 +256,7 @@ pub async fn ink_recognize_manual(
         .await?;
 
     let bookkeeping = Arc::clone(state.recognition());
-    let result = bookkeeping
+    bookkeeping
         .recognize_now(
             Arc::new(state.inner().clone()),
             recognizer,
@@ -248,19 +265,15 @@ pub async fn ink_recognize_manual(
         )
         .await?;
 
-    // Re-read the committed row so the view reflects what was stored (which may
-    // differ from `result` when the writer's transcript took priority).
+    // Re-read the committed row rather than returning the recognizer's result:
+    // the two differ when the writer's own transcript took priority, and what
+    // the Margin should show is what was stored.
     let record = state
         .read(move |conn| repositories::ink_recognition::get(conn, annotation))
         .await?
         .ok_or_else(|| AppError::internal("recognition result did not persist"))?;
 
-    let view = InkRecognitionView::from_record(record);
-    let _ = app.emit(
-        "ink:recognized",
-        serde_json::json!({ "annotationId": annotation.to_string(), "text": result.text }),
-    );
-    Ok(view)
+    Ok(InkRecognitionView::from_record(record))
 }
 
 /// The recognition state for every ink note on a Page, for the Margin to paint

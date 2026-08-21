@@ -20,10 +20,16 @@
  * recognize always proceeds — the writer asked.
  */
 
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+
 import * as service from '$lib/ink/service';
 import { renderInkPngAsync } from '$lib/ink/rasterize';
+import { isDesktop } from '$lib/services/ipc';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { InkRecognition, InkStroke } from '$lib/types/ink';
+
+/** The backend event carrying one note's recognition row. */
+const STATUS_EVENT = 'ink:recognition-status';
 
 class InkRecognitionStore {
   /** Recognition state by annotation id, for the open Page. */
@@ -31,6 +37,44 @@ class InkRecognitionStore {
 
   /** The surface width last seen, so a snapshot can be built without re-measuring. */
   private surfaceWidth = 0;
+
+  private unlisten: UnlistenFn[] = [];
+
+  /**
+   * Subscribes to backend recognition status. Returns a teardown.
+   *
+   * Automatic recognition runs in a background task, so without this the Margin
+   * would sit under an optimistic "Recognizing…" until the writer navigated
+   * away and back. Each event carries the note's whole persisted row, so this
+   * replaces the entry rather than patching it — two updates arriving close
+   * together cannot interleave into a state that was never stored.
+   */
+  start(): () => void {
+    if (!isDesktop) return () => {};
+
+    void listen<InkRecognition>(STATUS_EVENT, ({ payload }) => {
+      this.apply(payload);
+    }).then((off) => this.unlisten.push(off));
+
+    return () => {
+      for (const off of this.unlisten) off();
+      this.unlisten = [];
+    };
+  }
+
+  /**
+   * Applies one row from the backend.
+   *
+   * Notes for other Pages are ignored: the store only holds the open Page, and
+   * a job that finishes for a note the writer has navigated away from has
+   * nothing to update here — its result is already in the database and will be
+   * read when that Page is next opened.
+   */
+  private apply(row: InkRecognition): void {
+    if (!this.status.has(row.annotationId)) return;
+    this.status.set(row.annotationId, row);
+    this.status = new Map(this.status);
+  }
 
   /** Loads recognition status for a Page. Called when the ink store loads. */
   async load(pageId: string | null): Promise<void> {

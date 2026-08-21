@@ -33,8 +33,8 @@ use crate::app_state::AppState;
 use crate::domain::ids::AnnotationId;
 use crate::domain::ink::InkStroke;
 use crate::domain::ink_recognition::{
-    InkRecognitionInput, InkRecognitionRequest, InkRecognitionResult, InkRecognizer, LanguageHint,
-    RecognitionMode, ink_content_hash,
+    InkRecognitionInput, InkRecognitionRecord, InkRecognitionRequest, InkRecognitionResult,
+    InkRecognizer, LanguageHint, RecognitionMode, ink_content_hash,
 };
 use crate::error::{AppError, ErrorCode, Result};
 use crate::repositories;
@@ -90,6 +90,21 @@ impl InkSnapshot {
     }
 }
 
+/// A sink for recognition status changes.
+///
+/// Automatic recognition runs in a spawned task with no caller to return to, so
+/// without this the only way a view could learn a job had finished was to poll
+/// or to reload the Page. The queue publishes the note's row after every
+/// transition it makes, and the command layer turns that into a Tauri event.
+///
+/// It carries the persisted [`InkRecognitionRecord`] rather than a
+/// queue-internal summary, so what a view renders is always what was actually
+/// written — the event and the database cannot drift apart.
+///
+/// The queue knows nothing about Tauri: this is a plain closure, which is also
+/// what lets a test record transitions without an app handle.
+pub type StatusSink = Arc<dyn Fn(InkRecognitionRecord) + Send + Sync>;
+
 /// One scheduled job. Held in the per-note map so a reschedule can cancel its
 /// predecessor.
 struct PendingJob {
@@ -106,6 +121,9 @@ pub struct RecognitionBookkeeping {
     pending: Mutex<HashMap<AnnotationId, PendingJob>>,
     concurrency: Semaphore,
     debounce: Mutex<Duration>,
+    /// Installed once at startup, so every job — automatic or manual — reports
+    /// through the same channel.
+    sink: std::sync::OnceLock<StatusSink>,
 }
 
 impl Default for RecognitionBookkeeping {
@@ -114,11 +132,22 @@ impl Default for RecognitionBookkeeping {
             pending: Mutex::new(HashMap::new()),
             concurrency: Semaphore::new(MAX_CONCURRENCY),
             debounce: Mutex::new(DEBOUNCE),
+            sink: std::sync::OnceLock::new(),
         }
     }
 }
 
 impl RecognitionBookkeeping {
+    /// Installs the status sink. Called once, during app setup; a second call is
+    /// ignored rather than racing a live one.
+    pub fn set_status_sink(&self, sink: StatusSink) {
+        let _ = self.sink.set(sink);
+    }
+
+    fn status_sink(&self) -> Option<&StatusSink> {
+        self.sink.get()
+    }
+
     /// Sets the debounce window. The frontend may tune this from settings in a
     /// future iteration; for now it is the constant, with a setter so tests can
     /// shorten it.
@@ -164,6 +193,7 @@ impl RecognitionBookkeeping {
 
         let bookkeeping = Arc::clone(self);
         let debounce = *self.debounce.lock().await;
+        let sink = self.status_sink().cloned();
 
         tokio::spawn(async move {
             // Wait out the debounce. If a new schedule replaced this job, the
@@ -190,21 +220,34 @@ impl RecognitionBookkeeping {
                 Ok(r) => r,
                 Err(err) => {
                     tracing::warn!(annotation = %annotation_id, code = ?err.code, "could not build recognizer");
+                    // The error the recognizer builder raised is already written
+                    // for a reader ("AI is turned off", "no provider
+                    // configured"), so it is preferable to a generic sentence.
+                    let reason = err.message.clone();
                     let _ = state
                         .write(move |tx| {
                             repositories::ink_recognition::record_failure(
                                 tx,
                                 annotation_id,
-                                "Recognition is not configured. Add an AI provider in Settings.",
+                                &reason,
                             )
                         })
                         .await;
+                    publish_status(&state, sink.as_ref(), annotation_id).await;
                     return;
                 }
             };
 
-            let result =
-                run_recognition(&state, &recognizer, annotation_id, snapshot, cancel, false).await;
+            let result = run_recognition(
+                &state,
+                &recognizer,
+                annotation_id,
+                snapshot,
+                cancel,
+                false,
+                sink.as_ref(),
+            )
+            .await;
 
             if let Err(err) = result {
                 tracing::warn!(
@@ -252,6 +295,7 @@ impl RecognitionBookkeeping {
             snapshot,
             CancellationToken::new(),
             true,
+            self.status_sink(),
         )
         .await
     }
@@ -280,6 +324,7 @@ async fn run_recognition(
     snapshot: InkSnapshot,
     cancel: CancellationToken,
     _manual: bool,
+    sink: Option<&StatusSink>,
 ) -> Result<InkRecognitionResult> {
     let scheduled_hash = snapshot.content_hash();
 
@@ -288,6 +333,7 @@ async fn run_recognition(
         state
             .write(move |tx| repositories::ink_recognition::disable(tx, annotation_id))
             .await?;
+        publish_status(state, sink, annotation_id).await;
         return Err(AppError::invalid(
             "There is not enough handwriting there to recognise yet.",
         ));
@@ -304,6 +350,9 @@ async fn run_recognition(
     state
         .write(move |tx| repositories::ink_recognition::mark_recognizing(tx, annotation_id))
         .await?;
+    // Published before the request goes out, so a slow first byte still shows
+    // "Recognizing…" rather than nothing.
+    publish_status(state, sink, annotation_id).await;
 
     // Build the request from the snapshot and the configured language/mode.
     let language_hint = state
@@ -350,6 +399,7 @@ async fn run_recognition(
                     repositories::ink_recognition::record_failure(tx, annotation_id, &reason)
                 })
                 .await?;
+            publish_status(state, sink, annotation_id).await;
             return Err(err);
         }
     };
@@ -372,6 +422,7 @@ async fn run_recognition(
         state
             .write(move |tx| repositories::ink_recognition::invalidate(tx, annotation_id))
             .await?;
+        publish_status(state, sink, annotation_id).await;
         return Err(AppError::stale(
             "The handwriting changed while it was being recognised, so the result was discarded. \
              It will be recognised again.",
@@ -399,7 +450,43 @@ async fn run_recognition(
         );
     }
 
+    // Published whether or not the result was applied: when a writer's own
+    // transcript won, the view still needs to leave "Recognizing…" behind.
+    publish_status(state, sink, annotation_id).await;
+
     Ok(result)
+}
+
+/// Publishes a note's persisted recognition row to the status sink.
+///
+/// Re-reads the row rather than reporting what the caller intended to write, so
+/// a view can never be told something the database does not say — the
+/// repository's own guards (a user-edited transcript refusing an automatic
+/// result, for one) are reflected without the queue having to model them twice.
+///
+/// A publish failure is logged and swallowed: a status update is a courtesy to
+/// the UI, and failing a recognition because an event could not be sent would
+/// trade a real result for a cosmetic one.
+async fn publish_status(
+    state: &Arc<AppState>,
+    sink: Option<&StatusSink>,
+    annotation_id: AnnotationId,
+) {
+    let Some(sink) = sink else { return };
+    match state
+        .read(move |conn| repositories::ink_recognition::get(conn, annotation_id))
+        .await
+    {
+        Ok(Some(record)) => sink(record),
+        // No row means the note was deleted while the job ran; there is nothing
+        // to report and nobody to report it to.
+        Ok(None) => {}
+        Err(err) => tracing::debug!(
+            annotation = %annotation_id,
+            error = %err,
+            "could not publish recognition status"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -592,6 +679,136 @@ mod tests {
         };
         assert_eq!(row.recognized_text.as_deref(), Some("writer's words"));
         assert_eq!(row.transcript_source, TranscriptSource::UserEdited);
+    }
+
+    /// Records every status the queue publishes, so a test can assert on the
+    /// lifecycle a view would actually observe.
+    fn recording_sink() -> (StatusSink, Arc<std::sync::Mutex<Vec<RecognitionStatus>>>) {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let sink: StatusSink = Arc::new(move |record: InkRecognitionRecord| {
+            recorder.lock().unwrap().push(record.status);
+        });
+        (sink, seen)
+    }
+
+    #[tokio::test]
+    async fn a_successful_job_publishes_recognizing_then_recognized() {
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        let (sink, seen) = recording_sink();
+        bookkeeping.set_status_sink(sink);
+
+        let annotation = {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            repositories::ink::create_ink_annotation(&conn, page.id)
+                .unwrap()
+                .id
+        };
+        {
+            let conn = state.database().get().unwrap();
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+        }
+
+        let recognizer: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::always("a transcript"));
+        bookkeeping
+            .recognize_now(
+                Arc::clone(&state),
+                recognizer,
+                annotation,
+                snapshot(&[(0.1, 5.0), (0.2, 6.0)]),
+            )
+            .await
+            .unwrap();
+
+        // The in-flight state is published before the request, so a slow model
+        // still shows "Recognizing…" rather than nothing.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                RecognitionStatus::Recognizing,
+                RecognitionStatus::Recognized
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_job_publishes_its_failure() {
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        let (sink, seen) = recording_sink();
+        bookkeeping.set_status_sink(sink);
+
+        let annotation = {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            repositories::ink::create_ink_annotation(&conn, page.id)
+                .unwrap()
+                .id
+        };
+        {
+            let conn = state.database().get().unwrap();
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+        }
+
+        let failing: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::failing("no network"));
+        let _ = bookkeeping
+            .recognize_now(
+                Arc::clone(&state),
+                failing,
+                annotation,
+                snapshot(&[(0.1, 5.0), (0.2, 6.0)]),
+            )
+            .await;
+
+        // A view that showed "Recognizing…" is told to stop.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![RecognitionStatus::Recognizing, RecognitionStatus::Failed]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_job_with_no_sink_installed_still_runs() {
+        // The sink is a courtesy to the UI; recognition must not depend on one.
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        let annotation = {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            repositories::ink::create_ink_annotation(&conn, page.id)
+                .unwrap()
+                .id
+        };
+        {
+            let conn = state.database().get().unwrap();
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+        }
+
+        let recognizer: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::always("still works"));
+        let result = bookkeeping
+            .recognize_now(
+                Arc::clone(&state),
+                recognizer,
+                annotation,
+                snapshot(&[(0.1, 5.0), (0.2, 6.0)]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.text, "still works");
     }
 
     #[tokio::test]
