@@ -9,6 +9,7 @@
 pub mod annotation;
 pub mod ids;
 pub mod ink;
+pub mod ink_recognition;
 pub mod manuscript;
 pub mod settings;
 pub mod text;
