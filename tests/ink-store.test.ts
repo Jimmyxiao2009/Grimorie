@@ -28,6 +28,21 @@ vi.mock('$lib/stores/notices.svelte', () => ({
   notices: { failure: vi.fn(), info: vi.fn(), dismiss: vi.fn(), clear: vi.fn(), items: [] }
 }));
 
+// The recognition store is mocked so the ink store's scheduling calls can be
+// inspected directly — what it hands recognition is a correctness question, not
+// an implementation detail.
+const scheduleAutomatic = vi.fn<(annotationId: string, strokes: InkStroke[]) => Promise<void>>();
+vi.mock('$lib/stores/ink-recognition.svelte', () => ({
+  inkRecognition: {
+    scheduleAutomatic: (annotationId: string, strokes: InkStroke[]) =>
+      scheduleAutomatic(annotationId, strokes),
+    load: vi.fn(),
+    clear: vi.fn(),
+    setSurfaceWidth: vi.fn(),
+    forAnnotation: vi.fn()
+  }
+}));
+
 import { ink } from '$lib/stores/ink.svelte';
 import type { InkStroke } from '$lib/types/ink';
 
@@ -143,6 +158,45 @@ describe('ink store — failure handling', () => {
     await ink.commitStroke(stroke('s2'));
     expect(ink.saveError).toBe(false);
     expect(ink.strokesFor('note-1').length).toBe(2);
+  });
+});
+
+describe('ink store — what recognition is given', () => {
+  it('sends the whole note for recognition, not just the stroke just drawn', async () => {
+    // This is the defect that silently disabled automatic recognition: a
+    // snapshot of one stroke hashes differently from the note the backend
+    // re-reads, so every result on a multi-stroke note was rejected as stale.
+    addInkStrokes.mockResolvedValue(undefined);
+
+    await ink.commitStroke(stroke('s1'));
+    await ink.commitStroke(stroke('s2'));
+    await ink.commitStroke(stroke('s3'));
+
+    const lastCall = scheduleAutomatic.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe('note-1');
+    expect(lastCall?.[1].map((s) => s.id)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('sends the remaining strokes after an erase', async () => {
+    addInkStrokes.mockResolvedValue(undefined);
+    deleteInkStroke.mockResolvedValue(undefined);
+
+    await ink.commitStroke(stroke('s1'));
+    await ink.commitStroke(stroke('s2'));
+    scheduleAutomatic.mockClear();
+
+    await ink.eraseAt({ x: 1000, y: 6 }, 2000);
+
+    const lastCall = scheduleAutomatic.mock.calls.at(-1);
+    expect(lastCall?.[1].length).toBe(1);
+  });
+
+  it('does not schedule recognition when the stroke failed to persist', async () => {
+    // Recognising ink the backend never stored would compare a snapshot hash
+    // against strokes that are not there.
+    addInkStrokes.mockRejectedValueOnce(new Error('disk full'));
+    await ink.commitStroke(stroke('s1'));
+    expect(scheduleAutomatic).not.toHaveBeenCalled();
   });
 });
 

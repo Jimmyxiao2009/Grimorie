@@ -220,10 +220,16 @@ class InkStore {
     try {
       await service.addInkStrokes(annotationId, [stroke]);
       this.saveError = false;
-      // The ink changed: schedule automatic recognition. The backend debounces,
-      // so a burst of strokes collapses to one job. Recognition never blocks the
-      // save — the stroke is already persisted.
-      void inkRecognition.scheduleAutomatic(annotationId, [stroke]);
+      // The ink changed: schedule automatic recognition against the *whole*
+      // note, not just the stroke that was added. Two reasons, and both are
+      // fatal if this passes a single stroke: the recognizer would be sent a
+      // raster of one stroke rather than the handwriting, and the snapshot's
+      // content hash would cover one stroke while the queue's stale check
+      // re-reads all of them — so every result on a multi-stroke note would be
+      // discarded as stale. The backend debounces, so a burst of strokes still
+      // collapses to one job. Recognition never blocks the save — the stroke is
+      // already persisted.
+      void inkRecognition.scheduleAutomatic(annotationId, this.strokesFor(annotationId));
     } catch (error) {
       // Keep the stroke visible; flag the error and offer a retry.
       this.saveError = true;
