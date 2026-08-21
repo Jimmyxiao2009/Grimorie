@@ -390,6 +390,147 @@ mod base64 {
     }
 }
 
+/// The live-provider smoke test.
+///
+/// Everything else in this file runs against stubs, which proves the recognizer
+/// handles the shapes it is given but says nothing about whether a real model
+/// can read real handwriting. This is the one test that talks to a provider,
+/// and it is `#[ignore]`d and environment-gated so it never runs in CI and
+/// never spends money by accident.
+///
+/// See `docs/ink-live-smoke.md` for how to run it.
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::domain::ink_recognition::{
+        InkRecognitionInput, InkRecognitionRequest, LanguageHint, RecognitionMode,
+    };
+
+    /// Reads a required setting, explaining what is missing rather than
+    /// panicking on an unwrap.
+    fn env(name: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| {
+            panic!("{name} is not set — see docs/ink-live-smoke.md for the full invocation")
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "calls a real AI provider; needs credentials, see docs/ink-live-smoke.md"]
+    async fn live_recognition_reads_real_handwriting() {
+        let base_url = env("GRIMOIRE_LIVE_BASE_URL");
+        let model = env("GRIMOIRE_LIVE_MODEL");
+        let api_key = env("GRIMOIRE_LIVE_API_KEY");
+        let png_path = env("GRIMOIRE_LIVE_PNG");
+
+        let png = std::fs::read(&png_path)
+            .unwrap_or_else(|err| panic!("could not read {png_path}: {err}"));
+        assert!(!png.is_empty(), "{png_path} is empty");
+
+        let language = std::env::var("GRIMOIRE_LIVE_LANGUAGE").unwrap_or_else(|_| "auto".into());
+
+        let provider = Arc::new(
+            crate::ai::openai::OpenAiCompatible::new().expect("could not build the HTTP client"),
+        );
+        let recognizer = VisionRecognizer::new(provider, base_url, model.clone(), api_key, 0.0);
+
+        let started = std::time::Instant::now();
+        let outcome = recognizer
+            .recognize(
+                InkRecognitionRequest {
+                    input: InkRecognitionInput::Image {
+                        png,
+                        // The real dimensions are only used for logging; the
+                        // image itself carries its own.
+                        width: 0,
+                        height: 0,
+                    },
+                    mode: RecognitionMode::Auto,
+                    language_hint: LanguageHint::parse(&language),
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        let elapsed = started.elapsed();
+
+        match outcome {
+            Ok(result) => {
+                // Printed rather than asserted: only a human who knows what the
+                // image says can judge the transcript. `--nocapture` shows it.
+                println!("\n--- live recognition ---");
+                println!("model      {model}");
+                println!("latency    {}ms", elapsed.as_millis());
+                println!("language   {:?}", result.language);
+                println!("transcript {}", result.text);
+                println!("--- end ---\n");
+
+                assert!(
+                    !result.text.trim().is_empty(),
+                    "the model returned an empty transcript"
+                );
+
+                // When the expected text is supplied, the run also fails loudly
+                // on a transcript that is not close to it.
+                if let Ok(expected) = std::env::var("GRIMOIRE_LIVE_EXPECT") {
+                    let cer = character_error_rate(&expected, &result.text);
+                    println!("CER        {cer:.3} against {expected:?}\n");
+                    assert!(
+                        cer < 0.25,
+                        "transcript was too far from the expected text (CER {cer:.3})"
+                    );
+                }
+            }
+            Err(err) => panic!(
+                "live recognition failed: {} (detail: {:?})",
+                err.message, err.detail
+            ),
+        }
+    }
+
+    /// Character Error Rate over Unicode scalar values.
+    ///
+    /// A deliberate small duplicate of the frontend's implementation in
+    /// `src/lib/ink/evaluation.ts`: the harness that measures a *run* lives
+    /// there, and wiring this one test into it would mean shipping an
+    /// evaluation dependency into the app binary to serve a test that is
+    /// ignored by default.
+    fn character_error_rate(expected: &str, actual: &str) -> f64 {
+        let reference: Vec<char> = normalize(expected).chars().collect();
+        let hypothesis: Vec<char> = normalize(actual).chars().collect();
+        if reference.is_empty() {
+            return if hypothesis.is_empty() { 0.0 } else { 1.0 };
+        }
+
+        let mut previous: Vec<usize> = (0..=hypothesis.len()).collect();
+        let mut current = vec![0usize; hypothesis.len() + 1];
+        for (i, r) in reference.iter().enumerate() {
+            current[0] = i + 1;
+            for (j, h) in hypothesis.iter().enumerate() {
+                let substitution = previous[j] + usize::from(r != h);
+                current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+            }
+            std::mem::swap(&mut previous, &mut current);
+        }
+        previous[hypothesis.len()] as f64 / reference.len() as f64
+    }
+
+    /// Trims and collapses whitespace, so a model's line-break choice does not
+    /// dominate the score. Mirrors `normalizeForScoring` on the frontend.
+    fn normalize(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn the_smoke_tests_scoring_agrees_with_the_frontends() {
+        // The same cases the TypeScript harness pins, so the two
+        // implementations cannot quietly drift apart.
+        assert_eq!(character_error_rate("这里的转折", "这里的转折"), 0.0);
+        assert!((character_error_rate("这里的转折", "这里的转机") - 0.2).abs() < 1e-9);
+        assert_eq!(character_error_rate("one\ntwo", "one two"), 0.0);
+        assert_eq!(character_error_rate("", ""), 0.0);
+        assert_eq!(character_error_rate("", "invented"), 1.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
