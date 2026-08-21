@@ -566,3 +566,455 @@ fn erasing_a_stroke_persists_and_leaves_the_rest() {
     let notes = repositories::ink::strokes_for_page(&conn, page.id).unwrap();
     assert_eq!(notes[0].1.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Ink intelligence — recognition lifecycle, end to end.
+//
+// These mirror the flow scenarios in the ink-intelligence spec: recognise a
+// note and reload, invalidate on ink change, reject a stale response, prefer a
+// manual correction, and find a handwritten transcript through search. They run
+// against a real database file with the mock recognizer, so the persistence and
+// staleness guarantees are verified, not just the in-memory queue.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod ink_recognition_flows {
+    use super::*;
+    use crate::ai::recognition_queue::{InkSnapshot, RecognitionBookkeeping};
+    use crate::ai::recognizers::MockRecognizer;
+    use crate::app_state::AppState;
+    use crate::domain::ink::{InkPoint, InkStroke, InkTool};
+    use crate::domain::ink_recognition::{
+        InkRecognitionResult, InkRecognizer, RecognitionStatus, TranscriptSource,
+    };
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn stroke(points: &[(f32, f32)]) -> InkStroke {
+        InkStroke::new(
+            InkTool::Pen,
+            "ink-primary",
+            2.0,
+            points.iter().map(|(x, y)| InkPoint::new(*x, *y)).collect(),
+        )
+    }
+
+    /// A page with text, so an anchored ink note has something to point at.
+    fn page_with_text(conn: &rusqlite::Connection, text: &str) -> crate::domain::PageId {
+        let volume = repositories::volumes::create(conn, "A", None, None).unwrap();
+        let chapter = repositories::chapters::create(conn, volume.id, "One").unwrap();
+        let page = repositories::pages::create(conn, chapter.id, "First").unwrap();
+        repositories::pages::save_document(conn, page.id, document(text)).unwrap();
+        page.id
+    }
+
+    fn ink_note(
+        conn: &rusqlite::Connection,
+        page_id: crate::domain::PageId,
+    ) -> crate::domain::AnnotationId {
+        repositories::ink::create_ink_annotation(conn, page_id)
+            .unwrap()
+            .id
+    }
+
+    fn snapshot(strokes: Vec<InkStroke>) -> InkSnapshot {
+        InkSnapshot {
+            strokes,
+            surface_width: 300.0,
+            png: None,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    async fn recognize(
+        state: &Arc<AppState>,
+        bookkeeping: &Arc<RecognitionBookkeeping>,
+        annotation: crate::domain::AnnotationId,
+        strokes: Vec<InkStroke>,
+        transcript: &str,
+    ) -> crate::error::Result<InkRecognitionResult> {
+        let recognizer: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::always(transcript));
+        bookkeeping
+            .recognize_now(Arc::clone(state), recognizer, annotation, snapshot(strokes))
+            .await
+    }
+
+    #[tokio::test]
+    async fn flow1_recognition_persists_across_reload() {
+        // create Ink Note → add strokes → run mock recognizer → persist transcript
+        // → reload Page → transcript remains.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "The road had been salt once.");
+            let annotation = ink_note(&conn, page_id);
+            let strokes = vec![stroke(&[(0.1, 5.0), (0.2, 6.0), (0.3, 5.0)])];
+            repositories::ink::add_strokes(&conn, annotation, &strokes).unwrap();
+            annotation
+        };
+
+        let result = recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0), (0.3, 5.0)])],
+            "recognised transcript",
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "recognised transcript");
+
+        // A fresh connection (a "reopen") sees the same transcript.
+        drop(state);
+        let conn = db.get().unwrap();
+        let row = repositories::ink_recognition::get(&conn, annotation)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, RecognitionStatus::Recognized);
+        assert_eq!(
+            row.recognized_text.as_deref(),
+            Some("recognised transcript")
+        );
+    }
+
+    #[tokio::test]
+    async fn flow2_ink_changes_invalidate_and_reschedule() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            let strokes = vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])];
+            repositories::ink::add_strokes(&conn, annotation, &strokes).unwrap();
+            annotation
+        };
+
+        // Recognise once.
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])],
+            "first",
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.get().unwrap();
+            assert_eq!(
+                repositories::ink_recognition::get(&conn, annotation)
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                RecognitionStatus::Recognized
+            );
+        }
+
+        // Add a stroke: the ink changes, and the old recognition becomes stale.
+        {
+            let conn = db.get().unwrap();
+            repositories::ink::add_strokes(
+                &conn,
+                annotation,
+                &[stroke(&[(0.5, 50.0), (0.6, 51.0)])],
+            )
+            .unwrap();
+            repositories::ink_recognition::invalidate(&conn, annotation).unwrap();
+        }
+        let row = {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(row.status, RecognitionStatus::Stale);
+        // The old transcript is kept while a refresh is due.
+        assert_eq!(row.recognized_text.as_deref(), Some("first"));
+    }
+
+    #[tokio::test]
+    async fn flow3_stale_response_does_not_overwrite_newer_ink() {
+        // recognition request A starts → ink changes → request A returns →
+        // result A must not overwrite the current state.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+            annotation
+        };
+
+        // A slow recognizer, so the test can mutate the ink while it runs.
+        let slow: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::responder(|_| {
+            std::thread::sleep(Duration::from_millis(40));
+            Ok(InkRecognitionResult {
+                text: "stale answer".into(),
+                confidence: None,
+                language: None,
+                provider: "mock".into(),
+                model: "mock-1".into(),
+            })
+        }));
+
+        let state_for_job = Arc::clone(&state);
+        let handle = tokio::spawn(async move {
+            bookkeeping
+                .recognize_now(
+                    state_for_job,
+                    slow,
+                    annotation,
+                    snapshot(vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])]),
+                )
+                .await
+        });
+
+        // Mutate the ink while recognition is in flight.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        {
+            let conn = db.get().unwrap();
+            repositories::ink::add_strokes(
+                &conn,
+                annotation,
+                &[stroke(&[(0.9, 90.0), (0.95, 91.0)])],
+            )
+            .unwrap();
+        }
+
+        let outcome = handle.await.unwrap();
+        assert!(outcome.is_err(), "a stale result must be rejected");
+
+        // No stale transcript was committed.
+        let row = {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        assert!(row.recognized_text.is_none());
+        assert_eq!(row.status, RecognitionStatus::Stale);
+    }
+
+    #[tokio::test]
+    async fn flow4_manual_correction_survives_reload_and_blocks_automatic() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+            annotation
+        };
+
+        // Recognise, then the writer corrects by hand.
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])],
+            "machine",
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::set_user_transcript(
+                &conn,
+                annotation,
+                "writer's correction",
+            )
+            .unwrap();
+        }
+
+        // A later automatic recognition lands: it must not clobber the writer.
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])],
+            "machine again",
+        )
+        .await
+        .unwrap();
+
+        // The writer's version remains authoritative.
+        let row = {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(row.recognized_text.as_deref(), Some("writer's correction"));
+        assert_eq!(row.transcript_source, TranscriptSource::UserEdited);
+    }
+
+    #[tokio::test]
+    async fn flow5_handwritten_transcript_is_searchable() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+            annotation
+        };
+
+        // Recognise with a CJK transcript, then search for it.
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])],
+            "这里的转折太突然了",
+        )
+        .await
+        .unwrap();
+
+        let hits = {
+            let conn = db.get().unwrap();
+            crate::search::search(&conn, "转折", None, 10).unwrap()
+        };
+        assert!(
+            hits.iter().any(|h| h.kind == crate::search::EntityKind::Ink
+                && h.entity_id == annotation.to_string()),
+            "handwritten transcript should be found in search"
+        );
+    }
+
+    #[tokio::test]
+    async fn convert_to_text_keeps_the_ink_and_creates_a_note() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let (page_id, annotation) = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+            (page_id, annotation)
+        };
+
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])],
+            "recognised transcript",
+        )
+        .await
+        .unwrap();
+
+        // Convert: keep the ink, create a text note, record lineage.
+        let note_id = {
+            let conn = db.get().unwrap();
+            let transcript = repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .and_then(|r| r.transcript().map(str::to_string))
+                .unwrap();
+            let note = repositories::annotations::create_for_page(
+                &conn,
+                page_id,
+                crate::domain::annotation::AnnotationKind::Note,
+                &transcript,
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE annotations SET source_ink_annotation_id = ?2 WHERE id = ?1",
+                rusqlite::params![note.id, annotation],
+            )
+            .unwrap();
+            note.id
+        };
+
+        // The ink note still exists, with its strokes intact.
+        let ink_strokes = {
+            let conn = db.get().unwrap();
+            repositories::ink::strokes_for_annotation(&conn, annotation).unwrap()
+        };
+        assert!(
+            !ink_strokes.is_empty(),
+            "the ink was not deleted by conversion"
+        );
+
+        // The text note carries the transcript and its lineage.
+        let conn = db.get().unwrap();
+        let note = repositories::annotations::get(&conn, note_id).unwrap();
+        assert_eq!(note.body, "recognised transcript");
+        let source: Option<String> = conn
+            .query_row(
+                "SELECT source_ink_annotation_id FROM annotations WHERE id = ?1",
+                [note_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source, Some(annotation.to_string()));
+    }
+
+    #[tokio::test]
+    async fn startup_repair_recovers_a_stuck_recognizing_row() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            ink_note(&conn, page_id)
+        };
+
+        // Simulate an abnormal exit mid-job: a row stuck in 'recognizing'.
+        {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::ensure_pending(&conn, annotation).unwrap();
+            repositories::ink_recognition::mark_recognizing(&conn, annotation).unwrap();
+        }
+
+        // On the next launch, the startup repair moves it to pending.
+        let repaired = {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::repair_transient(&conn).unwrap()
+        };
+        assert_eq!(repaired, 1);
+        let row = {
+            let conn = db.get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(row.status, RecognitionStatus::Pending);
+    }
+}
