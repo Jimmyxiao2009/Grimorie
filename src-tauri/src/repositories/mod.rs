@@ -11,6 +11,7 @@ pub mod bookmarks;
 pub mod chapters;
 pub mod drafts;
 pub mod ink;
+pub mod ink_recognition;
 pub mod pages;
 pub mod revisions;
 pub mod settings;

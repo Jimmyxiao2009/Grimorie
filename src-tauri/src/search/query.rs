@@ -331,6 +331,49 @@ fn hydrate(
                     page_id: Some(page_id),
                 }
             }),
+
+        EntityKind::Ink => conn
+            .query_row(
+                "SELECT r.recognized_text, a.page_id, p.title, c.title, v.title
+                   FROM ink_recognition r
+                   JOIN annotations a ON a.id = r.annotation_id
+                   JOIN pages p        ON p.id = a.page_id
+                   JOIN chapters c     ON c.id = p.chapter_id
+                   JOIN volumes v      ON v.id = c.volume_id
+                  WHERE r.annotation_id = ?1",
+                [entity_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .ok()
+            .and_then(
+                |(transcript, page_id, page_title, chapter_title, volume_title)| {
+                    // An ink note whose transcript was cleared should not produce a
+                    // hit that opens nothing.
+                    if transcript.is_empty() {
+                        return None;
+                    }
+                    let (snippet, highlights) = snippet_around(&transcript, terms, SNIPPET_CHARS);
+                    Some(SearchHit {
+                        kind,
+                        entity_id: entity_id.to_string(),
+                        volume_id: volume_id.to_string(),
+                        path: vec![volume_title, chapter_title, page_title],
+                        title: "Ink Note".to_string(),
+                        snippet,
+                        highlights,
+                        score,
+                        page_id: Some(page_id),
+                    })
+                },
+            ),
     };
 
     Ok(hit)

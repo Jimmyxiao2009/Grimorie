@@ -67,6 +67,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "ink",
         sql: include_str!("../../migrations/008_ink.sql"),
     },
+    Migration {
+        version: 9,
+        name: "ink_recognition",
+        sql: include_str!("../../migrations/009_ink_recognition.sql"),
+    },
 ];
 
 #[derive(Debug, Default, PartialEq)]

@@ -183,9 +183,10 @@ impl RecognitionMode {
 /// may be supplied when the writer knows, and is passed through to providers
 /// that can use it. The domain does not enumerate every tag; it only
 /// distinguishes "auto" from "a specific language".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LanguageHint {
+    #[default]
     Auto,
     /// A specific language tag, validated only to be non-empty.
     Language(String),
@@ -218,12 +219,6 @@ impl LanguageHint {
     /// Whether a recognizer should be told a specific language.
     pub fn is_specific(&self) -> bool {
         matches!(self, LanguageHint::Language(_))
-    }
-}
-
-impl Default for LanguageHint {
-    fn default() -> Self {
-        LanguageHint::Auto
     }
 }
 

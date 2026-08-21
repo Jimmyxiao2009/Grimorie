@@ -27,6 +27,10 @@ pub enum EntityKind {
     Chapter,
     Page,
     Annotation,
+    /// A handwritten margin note, searched by its *recognised transcript*. The
+    /// strokes themselves are never indexed — coordinates are not searchable —
+    /// so an ink note appears in results only once a transcript exists.
+    Ink,
 }
 
 impl EntityKind {
@@ -36,6 +40,7 @@ impl EntityKind {
             EntityKind::Chapter => "chapter",
             EntityKind::Page => "page",
             EntityKind::Annotation => "annotation",
+            EntityKind::Ink => "ink",
         }
     }
 
@@ -44,6 +49,7 @@ impl EntityKind {
             "volume" => EntityKind::Volume,
             "chapter" => EntityKind::Chapter,
             "annotation" => EntityKind::Annotation,
+            "ink" => EntityKind::Ink,
             _ => EntityKind::Page,
         }
     }
@@ -208,6 +214,29 @@ pub fn rebuild(conn: &Connection) -> Result<usize> {
     })? {
         let (id, volume, body) = row?;
         index(conn, EntityKind::Annotation, &id, Some(&volume), "", &body)?;
+        indexed += 1;
+    }
+
+    // Recognised ink transcripts. Only notes with a transcript are indexed — an
+    // ink note with no recognised text has nothing searchable, and indexing an
+    // empty string would match every query.
+    let mut ink = conn.prepare(
+        "SELECT r.annotation_id, c.volume_id, r.recognized_text
+           FROM ink_recognition r
+           JOIN annotations a ON a.id = r.annotation_id
+           JOIN pages p        ON p.id = a.page_id
+           JOIN chapters c     ON c.id = p.chapter_id
+          WHERE r.recognized_text IS NOT NULL AND r.recognized_text <> ''",
+    )?;
+    for row in ink.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (id, volume, transcript) = row?;
+        index(conn, EntityKind::Ink, &id, Some(&volume), "", &transcript)?;
         indexed += 1;
     }
 
