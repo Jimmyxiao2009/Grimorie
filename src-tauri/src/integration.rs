@@ -404,3 +404,165 @@ fn an_ai_note_and_its_suggestion_are_created_together_or_not_at_all() {
             .is_empty()
     );
 }
+
+#[test]
+fn handwriting_survives_closing_and_reopening_the_application() {
+    use crate::domain::ink::{InkPoint, InkStroke, InkTool};
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("grimoire.db");
+
+    let page_id;
+    let annotation_id;
+    let first_stroke_id;
+
+    // --- First session: write a handwritten note. ---
+    {
+        let db = Database::open(&path).unwrap();
+        let conn = db.get().unwrap();
+
+        let volume = repositories::volumes::create(&conn, "Notes", None, None).unwrap();
+        let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+        let page = repositories::pages::create(&conn, chapter.id, "Margin").unwrap();
+        page_id = page.id;
+
+        let annotation = repositories::ink::create_ink_annotation(&conn, page_id).unwrap();
+        annotation_id = annotation.id;
+
+        let stroke = InkStroke::new(
+            InkTool::Pen,
+            "ink-primary",
+            2.0,
+            vec![
+                InkPoint::new(0.1, 10.0),
+                InkPoint::new(0.5, 14.0),
+                InkPoint::new(0.9, 10.0),
+            ],
+        );
+        first_stroke_id = stroke.id;
+        repositories::ink::add_strokes(&conn, annotation.id, &[stroke]).unwrap();
+    }
+    // Pool closed, WAL checkpointed — the app is "shut down".
+
+    // --- Second session: the handwriting is exactly where it was. ---
+    {
+        let db = Database::open(&path).unwrap();
+        let conn = db.get().unwrap();
+
+        let notes = repositories::ink::strokes_for_page(&conn, page_id).unwrap();
+        assert_eq!(notes.len(), 1, "the ink note survived the restart");
+        let (read_annotation, strokes) = &notes[0];
+        assert_eq!(*read_annotation, annotation_id);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].id, first_stroke_id);
+        // Coordinates are byte-for-byte what was written — no drift.
+        assert_eq!(strokes[0].points[0], InkPoint::new(0.1, 10.0));
+        assert_eq!(strokes[0].points[2], InkPoint::new(0.9, 10.0));
+        assert_eq!(strokes[0].tool, InkTool::Pen);
+    }
+}
+
+#[test]
+fn ink_and_text_annotations_coexist_and_ink_survives_page_navigation() {
+    use crate::domain::annotation::AnnotationKind;
+    use crate::domain::ink::{InkPoint, InkStroke, InkTool};
+
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(dir.path().join("grimoire.db")).unwrap();
+    let conn = db.get().unwrap();
+
+    let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+    let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+    let page_a = repositories::pages::create(&conn, chapter.id, "A").unwrap();
+    let page_b = repositories::pages::create(&conn, chapter.id, "B").unwrap();
+
+    // Page A: a text note and an ink note with three strokes.
+    repositories::annotations::create_for_page(&conn, page_a.id, AnnotationKind::Note, "A thought")
+        .unwrap();
+    let ink = repositories::ink::create_ink_annotation(&conn, page_a.id).unwrap();
+    let strokes: Vec<InkStroke> = (0..3)
+        .map(|i| {
+            InkStroke::new(
+                InkTool::Pen,
+                "ink-primary",
+                2.0,
+                vec![
+                    InkPoint::new(0.1, i as f32 * 10.0),
+                    InkPoint::new(0.5, i as f32 * 10.0 + 4.0),
+                ],
+            )
+        })
+        .collect();
+    repositories::ink::add_strokes(&conn, ink.id, &strokes).unwrap();
+
+    // Both kinds are on the page together.
+    let all = repositories::annotations::list(&conn, page_a.id).unwrap();
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().any(|a| a.kind == AnnotationKind::Note));
+    assert!(all.iter().any(|a| a.kind == AnnotationKind::Ink));
+
+    // Page B has no ink.
+    assert!(
+        repositories::ink::strokes_for_page(&conn, page_b.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    // "Navigate back" to Page A: the three strokes are all still there, intact.
+    let notes = repositories::ink::strokes_for_page(&conn, page_a.id).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].1.len(), 3);
+    // Drawing order is preserved across the round trip.
+    assert_eq!(notes[0].1[0].points[0].y, 0.0);
+    assert_eq!(notes[0].1[2].points[0].y, 20.0);
+}
+
+#[test]
+fn erasing_a_stroke_persists_and_leaves_the_rest() {
+    use crate::domain::ink::{InkPoint, InkStroke, InkTool};
+
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(dir.path().join("grimoire.db")).unwrap();
+    let conn = db.get().unwrap();
+
+    let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+    let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+    let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+
+    let ink = repositories::ink::create_ink_annotation(&conn, page.id).unwrap();
+    let s1 = InkStroke::new(
+        InkTool::Pen,
+        "ink-primary",
+        2.0,
+        vec![InkPoint::new(0.1, 0.0)],
+    );
+    let s2 = InkStroke::new(
+        InkTool::Pen,
+        "ink-primary",
+        2.0,
+        vec![InkPoint::new(0.5, 0.0)],
+    );
+    let s3 = InkStroke::new(
+        InkTool::Pen,
+        "ink-primary",
+        2.0,
+        vec![InkPoint::new(0.9, 0.0)],
+    );
+    repositories::ink::add_strokes(&conn, ink.id, &[s1, s2.clone(), s3]).unwrap();
+
+    // Erase the middle stroke.
+    repositories::ink::delete_stroke(&conn, s2.id).unwrap();
+
+    let notes = repositories::ink::strokes_for_page(&conn, page.id).unwrap();
+    assert_eq!(notes[0].1.len(), 2, "two strokes remain after erasing one");
+    assert!(
+        notes[0].1.iter().all(|s| s.id != s2.id),
+        "the erased stroke is gone"
+    );
+
+    // And the erasure survives a reopen.
+    drop(conn);
+    let conn = db.get().unwrap();
+    let notes = repositories::ink::strokes_for_page(&conn, page.id).unwrap();
+    assert_eq!(notes[0].1.len(), 2);
+}

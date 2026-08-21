@@ -9,7 +9,6 @@
 
   import InkSurface from '$lib/ink/InkSurface.svelte';
   import Menu from '$lib/components/Menu.svelte';
-  import IconButton from '$lib/components/IconButton.svelte';
   import { ink } from '$lib/stores/ink.svelte';
   import { relativeTime } from '$lib/utils/format';
   import { anchorOf, type Annotation } from '$lib/types/annotation';
@@ -27,7 +26,8 @@
 
   const anchor = $derived(anchorOf(annotation));
   const stale = $derived(annotation.status === 'stale');
-  const strokeCount = $derived(ink.strokesFor(annotation.id).length);
+  const strokes = $derived(ink.strokesFor(annotation.id));
+  const strokeCount = $derived(strokes.length);
   const active = $derived(ink.penMode);
 
   const actions = $derived<MenuItem[]>([
@@ -36,6 +36,22 @@
 
   /** A min height so an empty ink note still offers room to write. */
   const MIN_HEIGHT = 120;
+
+  /**
+   * The surface's height grows to fit its strokes, so handwriting written low
+   * in the margin is never clipped on reload. A little padding keeps the last
+   * stroke's tail from sitting on the edge.
+   */
+  const surfaceHeight = $derived.by(() => {
+    let max = 0;
+    for (const stroke of strokes) {
+      for (const point of stroke.points) {
+        if (point.y > max) max = point.y;
+      }
+    }
+    // 28px of slack below the lowest point, floored at the empty-note height.
+    return Math.max(MIN_HEIGHT, max + 28);
+  });
 </script>
 
 <article
@@ -49,7 +65,7 @@
   <span class="rule" aria-hidden="true"></span>
 
   <!-- The surface fills the note and is the writing area. -->
-  <div class="surface">
+  <div class="surface" style:min-height="{surfaceHeight}px">
     <InkSurface annotationId={annotation.id} {active} />
   </div>
 
@@ -73,7 +89,11 @@
     {#if stale}
       <span class="unstuck">Text changed</span>
     {/if}
-    <span class="when">{strokeCount > 0 ? `${strokeCount} stroke${strokeCount === 1 ? '' : 's'}` : 'empty'} · {relativeTime(annotation.updatedAt)}</span>
+    <span class="when">
+      {strokeCount > 0
+        ? `${strokeCount} stroke${strokeCount === 1 ? '' : 's'}`
+        : 'empty'} · {relativeTime(annotation.updatedAt)}
+    </span>
   </button>
 </article>
 
@@ -140,6 +160,11 @@
   /* In pen mode the controls step aside so they never sit under the hand. */
   .active .menu {
     opacity: 0;
+  }
+
+  /* The reveal link is metadata in pen mode, not a target. */
+  .active .reveal {
+    pointer-events: none;
   }
 
   .reveal {
