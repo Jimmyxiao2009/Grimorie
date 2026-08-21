@@ -17,13 +17,32 @@
 import { denormalizePoint } from '$lib/ink/geometry';
 import type { InkStroke } from '$lib/types/ink';
 
-/** Padding around the stroke bounds, in pixels, so edge strokes are not clipped. */
+/** Padding around the stroke bounds, in output pixels, so edge strokes are not clipped. */
 const PADDING = 24;
 /** The background the model reads against. Light and neutral. */
 const BACKGROUND = '#ffffff';
 /** The normalised ink colour. Dark on the light background, for any theme. */
 const INK = '#111111';
-/** Cap on the raster's longest side, so a long note does not produce a huge bitmap. */
+
+/**
+ * Floor on the raster's longest side.
+ *
+ * This is the parameter recognition quality turns on, and it exists because
+ * margin handwriting is *physically small*. A note in a 280px-wide Margin is
+ * perhaps 240×90 logical pixels; sent at native size, a vision model is asked
+ * to read a thumbnail, and Chinese — where the signal is stroke detail inside
+ * each character — suffers worst. Upscaling does not add information, but it
+ * puts the information that is there above the model's effective resolution.
+ *
+ * A typical three-line margin note scales about 4× under this floor, taking
+ * ~20px characters to ~85px.
+ */
+const MIN_DIM = 1024;
+
+/**
+ * Cap on the raster's longest side, so a long note does not produce a huge
+ * bitmap — bounding both the request size and what it costs to send.
+ */
 const MAX_DIM = 2048;
 
 /**
@@ -58,6 +77,27 @@ export function strokeBounds(
 }
 
 /**
+ * The scale factor from surface pixels to recognition pixels.
+ *
+ * Small notes are magnified up to {@link MIN_DIM} and large ones reduced to
+ * {@link MAX_DIM}; in between, a note is sent at its natural size. Only the
+ * longest side is considered: keying off the *shortest* side would blow a
+ * single underline — a few pixels tall and a few hundred wide — up to the cap
+ * for no gain.
+ *
+ * Exported so the raster budget is testable and so a future tuning pass has one
+ * function to change.
+ */
+export function recognitionScale(contentWidth: number, contentHeight: number): number {
+  const longest = Math.max(contentWidth, contentHeight);
+  if (longest <= 0) return 1;
+  // Upscale to the floor, then let the cap override — the cap wins, so a note
+  // can never exceed MAX_DIM in pursuit of the floor.
+  const upscaled = Math.max(1, MIN_DIM / longest);
+  return Math.min(upscaled, MAX_DIM / longest);
+}
+
+/**
  * Renders strokes to PNG bytes asynchronously on a clean, theme-independent
  * background.
  *
@@ -78,13 +118,17 @@ export async function renderInkPngAsync(
   if (!bounds) return null;
 
   const { minX, minY, maxX, maxY } = bounds;
-  const rawWidth = maxX - minX + PADDING * 2;
-  const rawHeight = maxY - minY + PADDING * 2;
-  if (rawWidth <= 0 || rawHeight <= 0) return null;
+  const contentWidth = maxX - minX;
+  const contentHeight = maxY - minY;
+  if (contentWidth <= 0 || contentHeight <= 0) return null;
 
-  const scale = Math.min(1, MAX_DIM / Math.max(rawWidth, rawHeight));
-  const width = Math.max(1, Math.round(rawWidth * scale));
-  const height = Math.max(1, Math.round(rawHeight * scale));
+  const scale = recognitionScale(contentWidth, contentHeight);
+
+  // Padding is added in output pixels, after scaling, so a heavily upscaled
+  // note gets the same quiet border as a large one rather than a proportionally
+  // inflated one.
+  const width = Math.max(1, Math.round(contentWidth * scale) + PADDING * 2);
+  const height = Math.max(1, Math.round(contentHeight * scale) + PADDING * 2);
 
   const canvas = canvasFactory(width, height);
   if (!canvas) return null;
@@ -93,7 +137,7 @@ export async function renderInkPngAsync(
 
   ctx.fillStyle = BACKGROUND;
   ctx.fillRect(0, 0, width, height);
-  ctx.translate(PADDING * scale, PADDING * scale);
+  ctx.translate(PADDING, PADDING);
   ctx.scale(scale, scale);
   ctx.translate(-minX, -minY);
   ctx.fillStyle = INK;
