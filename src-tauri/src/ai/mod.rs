@@ -20,6 +20,9 @@ pub mod context;
 pub mod openai;
 pub mod prompts;
 
+#[cfg(test)]
+mod transport_tests;
+
 use std::future::Future;
 use std::pin::Pin;
 
