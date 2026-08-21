@@ -332,7 +332,27 @@ async fn run_recognition(
         ));
     }
 
-    let result = outcome?;
+    // A recognizer failure must land in the row, not just in the return value.
+    // The note was moved to `recognizing` before the request; if the failure
+    // only propagated to the caller, an automatic job — whose caller is a
+    // spawned task nobody awaits — would leave the note showing "Recognizing…"
+    // until the next app start repaired it. Recording the failure is what makes
+    // the state retryable and gives the Margin something to say.
+    let result = match outcome {
+        Ok(result) => result,
+        Err(err) => {
+            // The message is the reader-facing sentence the error type already
+            // owns; `detail` is deliberately not stored, because it can carry
+            // provider internals that do not belong in the manuscript database.
+            let reason = err.message.clone();
+            state
+                .write(move |tx| {
+                    repositories::ink_recognition::record_failure(tx, annotation_id, &reason)
+                })
+                .await?;
+            return Err(err);
+        }
+    };
 
     // Stale rejection: re-read the live strokes and refuse to commit if the ink
     // has changed since the job was scheduled. A slow response that lands after
@@ -563,6 +583,97 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.text, "machine answer");
+
+        let row = {
+            let conn = state.database().get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(row.recognized_text.as_deref(), Some("writer's words"));
+        assert_eq!(row.transcript_source, TranscriptSource::UserEdited);
+    }
+
+    #[tokio::test]
+    async fn a_provider_failure_leaves_the_note_retryable_not_stuck_recognizing() {
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        let annotation = {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            repositories::ink::create_ink_annotation(&conn, page.id)
+                .unwrap()
+                .id
+        };
+        {
+            let conn = state.database().get().unwrap();
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+        }
+
+        let failing: Arc<dyn InkRecognizer> =
+            Arc::new(MockRecognizer::failing("the provider refused the request"));
+        let err = bookkeeping
+            .recognize_now(
+                Arc::clone(&state),
+                failing,
+                annotation,
+                snapshot(&[(0.1, 5.0), (0.2, 6.0)]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Provider);
+
+        let row = {
+            let conn = state.database().get().unwrap();
+            repositories::ink_recognition::get(&conn, annotation)
+                .unwrap()
+                .unwrap()
+        };
+        // Not stranded mid-flight: the row says why, so the Margin can offer a
+        // retry instead of a spinner that never resolves.
+        assert_eq!(row.status, RecognitionStatus::Failed);
+        assert_eq!(
+            row.error.as_deref(),
+            Some("the provider refused the request")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_does_not_erase_a_writers_own_transcript() {
+        let db = TempDatabase::open();
+        let state = Arc::new(AppState::new(db.db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+        let annotation = {
+            let conn = state.database().get().unwrap();
+            let volume = repositories::volumes::create(&conn, "A", None, None).unwrap();
+            let chapter = repositories::chapters::create(&conn, volume.id, "One").unwrap();
+            let page = repositories::pages::create(&conn, chapter.id, "First").unwrap();
+            repositories::ink::create_ink_annotation(&conn, page.id)
+                .unwrap()
+                .id
+        };
+        {
+            let conn = state.database().get().unwrap();
+            repositories::ink::add_strokes(&conn, annotation, &[stroke(&[(0.1, 5.0), (0.2, 6.0)])])
+                .unwrap();
+            repositories::ink_recognition::ensure_pending(&conn, annotation).unwrap();
+            repositories::ink_recognition::set_user_transcript(&conn, annotation, "writer's words")
+                .unwrap();
+        }
+
+        let failing: Arc<dyn InkRecognizer> = Arc::new(MockRecognizer::failing("network down"));
+        let _ = bookkeeping
+            .recognize_now(
+                Arc::clone(&state),
+                failing,
+                annotation,
+                snapshot(&[(0.1, 5.0), (0.2, 6.0)]),
+            )
+            .await;
 
         let row = {
             let conn = state.database().get().unwrap();
