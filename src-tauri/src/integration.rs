@@ -744,6 +744,58 @@ mod ink_recognition_flows {
     }
 
     #[tokio::test]
+    async fn recognised_ink_reports_itself_current_so_a_reschedule_costs_nothing() {
+        // The contract `ink_recognize` relies on to skip needless model calls:
+        // once a result is committed, the note reports itself current for
+        // exactly the ink it was recognised from — and not for any other ink.
+        // If this ever stopped holding, every schedule would become a paid
+        // vision request whether or not the handwriting had changed.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grimoire.db");
+        let db = Database::open(&path).unwrap();
+        let state = Arc::new(AppState::new(db.clone()).unwrap());
+        let bookkeeping = Arc::new(RecognitionBookkeeping::default());
+
+        let strokes = vec![stroke(&[(0.1, 5.0), (0.2, 6.0)])];
+        let annotation = {
+            let conn = db.get().unwrap();
+            let page_id = page_with_text(&conn, "Some text.");
+            let annotation = ink_note(&conn, page_id);
+            repositories::ink::add_strokes(&conn, annotation, &strokes).unwrap();
+            annotation
+        };
+
+        recognize(
+            &state,
+            &bookkeeping,
+            annotation,
+            strokes.clone(),
+            "a transcript",
+        )
+        .await
+        .unwrap();
+
+        let conn = db.get().unwrap();
+        let current_hash = crate::domain::ink_recognition::ink_content_hash(&strokes);
+        assert!(
+            repositories::ink_recognition::is_current_for(&conn, annotation, &current_hash)
+                .unwrap(),
+            "a freshly recognised note should report itself current"
+        );
+
+        // Different ink is not current, so a real change still schedules.
+        let changed = vec![
+            stroke(&[(0.1, 5.0), (0.2, 6.0)]),
+            stroke(&[(0.7, 70.0), (0.8, 71.0)]),
+        ];
+        let changed_hash = crate::domain::ink_recognition::ink_content_hash(&changed);
+        assert!(
+            !repositories::ink_recognition::is_current_for(&conn, annotation, &changed_hash)
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn flow3_stale_response_does_not_overwrite_newer_ink() {
         // recognition request A starts → ink changes → request A returns →
         // result A must not overwrite the current state.

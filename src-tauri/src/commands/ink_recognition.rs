@@ -191,6 +191,24 @@ pub async fn ink_recognize(
 
     let hash = snapshot.content_hash();
 
+    // If the note already holds a transcript for exactly this ink, there is
+    // nothing to gain from recognising it again — and a great deal to lose,
+    // since every needless schedule is a vision request the writer pays for.
+    // This is what makes it safe for callers to schedule liberally: an undo
+    // that returns the ink to an already-recognised state costs nothing.
+    //
+    // Checked before the invalidation below, because invalidating first would
+    // mark a note stale that is in fact current.
+    let hash_for_check = hash.clone();
+    let already_current = state
+        .read(move |conn| {
+            repositories::ink_recognition::is_current_for(conn, annotation, &hash_for_check)
+        })
+        .await?;
+    if already_current {
+        return Ok(hash);
+    }
+
     // Always invalidate, so a note that changed but cannot auto-recognise still
     // shows as stale rather than falsely current.
     state
