@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { Editor } from '@tiptap/core';
 
   import Button from '$lib/components/Button.svelte';
@@ -14,12 +14,12 @@
   import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
   import SearchDialog from '$lib/search/SearchDialog.svelte';
   import BookmarksDialog from '$lib/bookmarks/BookmarksDialog.svelte';
-  import { setHighlightRanges, type HighlightRange } from '$lib/editor/highlights';
-  import { textRangeToSelection } from '$lib/editor/offsets';
-  import FormatBar from '$lib/editor/FormatBar.svelte';
   import PageEditor, { type EditorState } from '$lib/editor/PageEditor.svelte';
+  import SelectionToolbar from '$lib/editor/SelectionToolbar.svelte';
   import SaveIndicator from '$lib/editor/SaveIndicator.svelte';
   import { autosave } from '$lib/editor/autosave.svelte';
+  import { setHighlightRanges, type HighlightRange } from '$lib/editor/highlights';
+  import { textRangeToSelection } from '$lib/editor/offsets';
 
   import { viewport } from '$lib/design/viewport.svelte';
   import { activePage } from '$lib/stores/page.svelte';
@@ -43,6 +43,13 @@
   let editorState = $state<EditorState | null>(null);
   let navOpen = $state(false);
 
+  let sheet = $state<HTMLElement | null>(null);
+  let marginRef = $state<ReturnType<typeof Margin> | null>(null);
+
+  /** Vertical offset of each anchored note's text within the sheet. */
+  let anchorOffsets = $state<Map<string, number>>(new Map());
+  let contentHeight = $state(0);
+
   type Target = { kind: 'chapter' | 'page'; id: string; title: string };
   let renameOpen = $state(false);
   let renameTarget = $state<Target | null>(null);
@@ -54,25 +61,23 @@
   let linkOpen = $state(false);
   let linkUrl = $state('');
 
+  /** Transient, for widths where the Margin cannot be a pane. */
+  let marginOverlayOpen = $state(false);
   let historyOpen = $state(false);
   let searchOpen = $state(false);
   let bookmarksOpen = $state(false);
-
 
   onMount(() => {
     void workspace.open(volumeId, pageId);
     void bookmarks.loadForVolume(volumeId);
     void ai.loadConfiguration();
     margin.start();
+    autosave.onsaved = (saved) => activePage.adoptSaved(saved);
 
-    // A finished AI run has written a note and possibly a suggestion; both are
-    // re-read rather than assembled from the stream, so the Margin shows what
-    // was actually stored.
     const stopAi = ai.start(() => {
       void margin.refresh();
       void ai.loadSuggestions(workspace.activePageId);
     });
-    autosave.onsaved = (saved) => activePage.adoptSaved(saved);
 
     // A save must not be left waiting on a debounce timer when the writer
     // switches away from the window, closes the lid, or shuts down.
@@ -114,6 +119,55 @@
     if (autosave.state === 'saved' && autosave.lastSavedAt !== null) void margin.refresh();
   });
 
+  $effect(() => {
+    autosave.setDebounce(settingsStore.settings.autosaveDebounceMs);
+  });
+
+  /**
+   * Measures where each anchored note's text sits, so the Margin can put the
+   * note level with it.
+   *
+   * Offsets are taken relative to the sheet, and the sheet and the Margin share
+   * one scroll container — so these numbers are content coordinates and do not
+   * have to be recomputed when the writer scrolls.
+   */
+  function measureAnchors() {
+    const view = editor?.view;
+    const map = editorState?.offsets;
+    if (!view || !map || !sheet) return;
+
+    const sheetTop = sheet.getBoundingClientRect().top;
+    const size = view.state.doc.content.size;
+    const measured = new Map<string, number>();
+
+    for (const note of margin.visible) {
+      const anchor = anchorOf(note);
+      if (!anchor) continue;
+      const { from } = textRangeToSelection(map, anchor);
+      if (from < 0 || from > size) continue;
+      try {
+        const coords = view.coordsAtPos(from);
+        measured.set(note.id, Math.max(0, Math.round(coords.top - sheetTop)));
+      } catch {
+        // A position the view cannot resolve yet. Leaving it out simply means
+        // the note is not placed this frame.
+      }
+    }
+
+    anchorOffsets = measured;
+    contentHeight = sheet.scrollHeight;
+  }
+
+  // Re-measure when the document, the notes, or the window change. Reading
+  // these values is what subscribes the effect to them.
+  $effect(() => {
+    void editorState;
+    void margin.visible;
+    void viewport.width;
+    const frame = requestAnimationFrame(measureAnchors);
+    return () => cancelAnimationFrame(frame);
+  });
+
   // Push annotated ranges into the editor whenever either side changes.
   $effect(() => {
     const view = editor?.view ?? null;
@@ -123,7 +177,6 @@
     const ranges: HighlightRange[] = [];
     for (const annotation of margin.visible) {
       const anchor = anchorOf(annotation);
-      // Whole-Page notes have nothing to underline.
       if (!anchor) continue;
       const { from, to } = textRangeToSelection(map, anchor);
       ranges.push({
@@ -139,13 +192,23 @@
     setHighlightRanges(view, ranges);
   });
 
-  /**
-   * Reloads after a suggestion has been applied.
-   *
-   * The backend rewrote the document, so the editor is rebuilt from the stored
-   * Page rather than patched — the editor is keyed by Page id and a genuinely
-   * new record is what it needs.
-   */
+  const chapterOf = $derived(
+    workspace.chapters.find((chapter) =>
+      chapter.pages.some((page) => page.id === workspace.activePageId)
+    ) ?? null
+  );
+
+  const showNavPane = $derived(viewport.navIsPane && navOpen);
+  /** The Margin is beside the sheet only where all three regions fit. */
+  const marginIsPane = $derived(viewport.marginIsPane && margin.paneOpen);
+  const marginIsOverlay = $derived(!viewport.marginIsPane && marginOverlayOpen);
+  const marginShown = $derived(marginIsPane || marginIsOverlay);
+
+  function toggleMargin() {
+    if (viewport.marginIsPane) margin.setPaneOpen(!margin.paneOpen);
+    else marginOverlayOpen = !marginOverlayOpen;
+  }
+
   async function reloadAfterApply() {
     const id = workspace.activePageId;
     if (!id) return;
@@ -154,7 +217,6 @@
     await ai.loadSuggestions(id);
   }
 
-  /** Scrolls the manuscript to an annotation's text and selects it. */
   function reveal(annotation: Annotation) {
     const anchor = anchorOf(annotation);
     const map = editorState?.offsets;
@@ -164,21 +226,16 @@
     margin.focusedId = annotation.id;
   }
 
-  // Keep the editor's debounce in step with the setting.
-  $effect(() => {
-    autosave.setDebounce(settingsStore.settings.autosaveDebounceMs);
-  });
-
-  const chapterOf = $derived(
-    workspace.chapters.find((chapter) =>
-      chapter.pages.some((page) => page.id === workspace.activePageId)
-    ) ?? null
-  );
-
-  const showNavPane = $derived(viewport.navIsPane);
-  // The Margin is a real pane only when all three regions fit. Below that it
-  // slides over, so the manuscript never gets squeezed to make room for notes.
-  const marginIsPane = $derived(viewport.marginIsPane && margin.paneOpen);
+  /** Opens the Margin if it is closed, then runs an action inside it. */
+  async function inMargin(action: 'note' | 'ask') {
+    if (!marginShown) {
+      if (viewport.marginIsPane) margin.setPaneOpen(true);
+      else marginOverlayOpen = true;
+      await tick();
+    }
+    if (action === 'note') marginRef?.beginNote();
+    else marginRef?.beginAsk();
+  }
 
   async function leave() {
     await autosave.flush();
@@ -214,8 +271,6 @@
   }
 
   async function openHistory() {
-    // Flush first, so the version list includes what was just typed rather
-    // than showing history that stops a paragraph short.
     await autosave.flush();
     historyOpen = true;
   }
@@ -233,8 +288,6 @@
       editor.chain().focus().unsetLink().run();
       return;
     }
-    // Bare domains are what people actually type; without a scheme the browser
-    // would treat the href as a relative path.
     const href = /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
     editor.chain().focus().extendMarkRange('link').setLink({ href }).run();
   }
@@ -242,9 +295,14 @@
   async function onKeydown(event: KeyboardEvent) {
     const mod = event.ctrlKey || event.metaKey;
     if (!mod) {
-      if (event.key === 'Escape' && navOpen) {
-        event.preventDefault();
-        navOpen = false;
+      if (event.key === 'Escape') {
+        if (marginOverlayOpen) {
+          event.preventDefault();
+          marginOverlayOpen = false;
+        } else if (navOpen && !viewport.navIsPane) {
+          event.preventDefault();
+          navOpen = false;
+        }
       }
       return;
     }
@@ -261,8 +319,6 @@
         else if (workspace.chapters[0]) await workspace.createPage(workspace.chapters[0].id);
         break;
       case 'f':
-        // Ctrl+F searches this Volume, Ctrl+Shift+F the whole library. Both
-        // open the same panel, which can switch scope without retyping.
         event.preventDefault();
         searchOpen = true;
         break;
@@ -276,54 +332,56 @@
         if (event.shiftKey) bookmarksOpen = true;
         else if (workspace.activePageId) await bookmarks.toggle(workspace.activePageId);
         break;
+      case '\\':
+        event.preventDefault();
+        navOpen = !navOpen;
+        break;
     }
   }
+
+  // The navigation pane opens with the Volume on a screen wide enough for it.
+  $effect(() => {
+    navOpen = viewport.navIsPane;
+  });
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 <div class="workspace" data-layout={viewport.layout}>
+  <!-- One rail, and only for things that act on the whole Page or the whole
+       Volume. Formatting lives over the selection, where it is being used. -->
   <header class="rail">
     <div class="rail-left">
-      {#if !showNavPane}
-        <IconButton name="menu" label="Show manuscript" size="sm" onclick={() => (navOpen = true)} />
-      {/if}
+      <IconButton
+        name="panelLeft"
+        label={navOpen ? 'Hide the manuscript' : 'Show the manuscript'}
+        size="sm"
+        pressed={navOpen}
+        onclick={() => (navOpen = !navOpen)}
+      />
       <IconButton name="arrowLeft" label="Back to Library" size="sm" onclick={leave} />
 
-      <nav class="breadcrumb" aria-label="Location">
-        <button type="button" class="crumb volume truncate" onclick={leave}>
-          {workspace.volume?.title ?? 'Loading…'}
+      <nav class="where" aria-label="Location">
+        <button type="button" class="volume" onclick={leave}>
+          {workspace.volume?.title ?? '…'}
         </button>
         {#if chapterOf}
-          <Icon name="chevronRight" size={13} />
-          <span class="crumb truncate">{chapterOf.title}</span>
+          <span class="slash" aria-hidden="true">/</span>
+          <span class="chapter">{chapterOf.title}</span>
         {/if}
       </nav>
     </div>
 
-    {#if !viewport.isNarrow}
-      <div class="rail-format">
-        <FormatBar {editor} state={editorState} onlink={openLinkDialog} />
-      </div>
-    {/if}
-
     <div class="rail-right">
+      {#if activePage.page && !viewport.isNarrow}
+        <span class="words tabular">{count(activePage.words)} words</span>
+      {/if}
       <SaveIndicator />
       <IconButton name="search" label="Search" size="sm" onclick={() => (searchOpen = true)} />
       <IconButton
-        name="settings"
-        label="Settings"
-        size="sm"
-        onclick={async () => {
-          await autosave.flush();
-          router.toSettings();
-        }}
-      />
-      <IconButton
         name="bookmark"
-        label={bookmarks.isMarked(workspace.activePageId) ? 'Remove bookmark' : 'Bookmark this Page'}
+        label={bookmarks.isMarked(workspace.activePageId) ? 'Remove bookmark' : 'Bookmark'}
         size="sm"
-        tone={bookmarks.isMarked(workspace.activePageId) ? 'accent' : 'default'}
         pressed={bookmarks.isMarked(workspace.activePageId)}
         disabled={!workspace.activePageId}
         onclick={() => workspace.activePageId && bookmarks.toggle(workspace.activePageId)}
@@ -338,105 +396,111 @@
       <span class="margin-toggle">
         <IconButton
           name="panelRight"
-          label={marginIsPane
-            ? margin.openCount > 0
-              ? `Margin, ${margin.openCount} notes`
-              : 'Margin'
-            : 'Open the Margin'}
+          label={marginShown ? 'Hide the Margin' : 'Show the Margin'}
           size="sm"
-          pressed={margin.paneOpen}
-          disabled={!activePage.page}
-          onclick={() => margin.setPaneOpen(!margin.paneOpen)}
+          pressed={marginShown}
+          onclick={toggleMargin}
         />
-        {#if margin.openCount > 0}
-          <span class="badge tabular" aria-hidden="true">{margin.openCount}</span>
+        {#if margin.openCount > 0 && !marginShown}
+          <span class="tally tabular" aria-hidden="true">{margin.openCount}</span>
         {/if}
       </span>
+      <IconButton
+        name="settings"
+        label="Settings"
+        size="sm"
+        onclick={async () => {
+          await autosave.flush();
+          router.toSettings();
+        }}
+      />
     </div>
   </header>
 
   <div class="body">
     {#if showNavPane}
-      <aside class="pane nav">
-        <ManuscriptTree onrename={beginRename} ondelete={beginDelete} />
-      </aside>
+      <aside class="pane nav"><ManuscriptTree onrename={beginRename} ondelete={beginDelete} /></aside>
     {/if}
 
-    <main class="editor" data-scroll aria-label="Manuscript">
+    <!-- The sheet and its Margin share one scroll container, which is what lets
+         a marginal note stay level with the words it belongs to. -->
+    <main class="reading" data-scroll aria-label="Manuscript">
       {#if workspace.failure}
-        <EmptyState title={workspace.failure} hint="Your manuscripts have not been changed.">
-          {#snippet action()}
-            <Button variant="secondary" onclick={() => router.toLibrary()}>Back to Library</Button>
-          {/snippet}
-        </EmptyState>
+        <div class="centred">
+          <EmptyState title={workspace.failure} hint="Your manuscripts have not been changed.">
+            {#snippet action()}
+              <Button variant="secondary" onclick={() => router.toLibrary()}>Back to Library</Button>
+            {/snippet}
+          </EmptyState>
+        </div>
       {:else if workspace.loading}
         <p class="status">Opening…</p>
       {:else if workspace.isEmpty}
-        <EmptyState
-          title="This Volume has no Chapters."
-          hint="A Chapter gives the manuscript its structure. Pages go inside it."
-        >
-          {#snippet action()}
-            <Button variant="primary" icon="plus" onclick={() => void workspace.createChapter()}>
-              New Chapter
-            </Button>
-          {/snippet}
-        </EmptyState>
+        <div class="centred">
+          <EmptyState
+            title="This Volume has no Chapters."
+            hint="A Chapter gives the manuscript its structure. Pages go inside it."
+          >
+            {#snippet action()}
+              <Button variant="primary" icon="plus" onclick={() => void workspace.createChapter()}>
+                New Chapter
+              </Button>
+            {/snippet}
+          </EmptyState>
+        </div>
       {:else if activePage.failure}
-        <EmptyState title={activePage.failure} />
+        <div class="centred"><EmptyState title={activePage.failure} /></div>
       {:else if !workspace.activePageId}
-        <EmptyState
-          title="No Page is open."
-          hint="Choose a Page from the manuscript, or add one to a Chapter."
-        />
+        <div class="centred">
+          <EmptyState title="No Page is open." hint="Choose one from the manuscript." />
+        </div>
       {:else if activePage.page}
-        <!-- Keyed on the Page id: opening a different Page builds a fresh
-             editor, which is what keeps undo history from crossing Pages. -->
-        {#key activePage.page.id}
-          <PageEditor
-            page={activePage.page}
-            spellcheck={settingsStore.settings.spellcheck}
-            onready={(instance) => (editor = instance)}
-            onstate={(state) => (editorState = state)}
-          />
-        {/key}
+        <div class="spread" class:with-margin={marginIsPane}>
+          <article class="sheet" bind:this={sheet}>
+            {#key activePage.page.id}
+              <PageEditor
+                page={activePage.page}
+                spellcheck={settingsStore.settings.spellcheck}
+                onready={(instance) => (editor = instance)}
+                onstate={(state) => (editorState = state)}
+              />
+            {/key}
+          </article>
+
+          {#if marginIsPane}
+            <div class="beside">
+              <Margin
+                bind:this={marginRef}
+                pageId={activePage.page.id}
+                selection={editorState?.selection ?? null}
+                offsets={anchorOffsets}
+                {contentHeight}
+                onreveal={reveal}
+                onapplied={reloadAfterApply}
+              />
+            </div>
+          {/if}
+        </div>
       {:else}
         <p class="status">Opening Page…</p>
       {/if}
     </main>
-
-    {#if marginIsPane}
-      <aside class="pane margin-pane">
-        <Margin
-          pageId={activePage.page?.id ?? null}
-          selection={editorState?.selection ?? null}
-          onreveal={reveal}
-          onapplied={reloadAfterApply}
-        />
-      </aside>
-    {/if}
   </div>
-
-  {#if viewport.isNarrow}
-    <div class="bottom">
-      <FormatBar {editor} state={editorState} onlink={openLinkDialog} />
-      <span class="tally tabular">{count(activePage.words)} words</span>
-    </div>
-  {/if}
 </div>
 
+<SelectionToolbar
+  {editor}
+  {editorState}
+  aiAvailable={ai.isConfigured && settingsStore.settings.aiEnabled}
+  onlink={openLinkDialog}
+  onnote={() => void inMargin('note')}
+  onask={() => void inMargin('ask')}
+/>
+
 <!-- The manuscript as an overlay, for widths where it cannot be a pane. -->
-{#if !showNavPane && navOpen}
-  <div
-    class="scrim"
-    role="presentation"
-    onpointerdown={() => (navOpen = false)}
-  ></div>
-  <aside class="pane overlay" aria-label="Manuscript">
-    <header class="overlay-head">
-      <span class="overlay-title truncate">{workspace.volume?.title ?? ''}</span>
-      <IconButton name="close" label="Close manuscript" size="sm" onclick={() => (navOpen = false)} />
-    </header>
+{#if navOpen && !viewport.navIsPane}
+  <div class="scrim" role="presentation" onpointerdown={() => (navOpen = false)}></div>
+  <aside class="pane overlay left" aria-label="Manuscript">
     <ManuscriptTree
       onrename={beginRename}
       ondelete={beginDelete}
@@ -445,39 +509,17 @@
   </aside>
 {/if}
 
-<Dialog
-  bind:open={renameOpen}
-  title={renameTarget?.kind === 'chapter' ? 'Rename Chapter' : 'Rename Page'}
->
-  <TextField bind:value={renameTitle} label="Title" autofocus onenter={confirmRename} />
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (renameOpen = false)}>Cancel</Button>
-    <Button variant="primary" disabled={!renameTitle.trim()} onclick={confirmRename}>Save</Button>
-  {/snippet}
-</Dialog>
-
-<Dialog
-  bind:open={deleteOpen}
-  title={deleteTarget ? `Delete “${deleteTarget.title}”?` : 'Delete?'}
-  description={deleteTarget?.kind === 'chapter'
-    ? 'The Chapter and every Page inside it will be deleted. This cannot be undone.'
-    : 'This Page will be deleted. This cannot be undone.'}
->
-  <p class="warning">Nothing else in the Volume is affected.</p>
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (deleteOpen = false)}>Cancel</Button>
-    <Button variant="danger" onclick={confirmDelete}>Delete</Button>
-  {/snippet}
-</Dialog>
-
-{#if !marginIsPane && margin.paneOpen}
-  <div class="scrim" role="presentation" onpointerdown={() => margin.setPaneOpen(false)}></div>
-  <aside class="pane margin-overlay">
+{#if marginIsOverlay && activePage.page}
+  <div class="scrim" role="presentation" onpointerdown={() => (marginOverlayOpen = false)}></div>
+  <aside class="pane overlay right" aria-label="Margin" data-scroll>
     <Margin
-      pageId={activePage.page?.id ?? null}
+      bind:this={marginRef}
+      pageId={activePage.page.id}
       selection={editorState?.selection ?? null}
+      offsets={new Map()}
+      contentHeight={0}
       onreveal={reveal}
-      onclose={() => margin.setPaneOpen(false)}
+      onapplied={reloadAfterApply}
     />
   </aside>
 {/if}
@@ -514,12 +556,35 @@
   currentText={activePage.page?.plainText ?? ''}
   currentWords={activePage.words}
   onrestored={(page) => {
-    // Reload rather than patching in place: restoring replaces the document,
-    // and the editor is keyed by Page id so it needs a genuinely new record.
     void activePage.load(page.id);
     void workspace.refresh();
   }}
 />
+
+<Dialog
+  bind:open={renameOpen}
+  title={renameTarget?.kind === 'chapter' ? 'Rename Chapter' : 'Rename Page'}
+>
+  <TextField bind:value={renameTitle} label="Title" autofocus onenter={confirmRename} />
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (renameOpen = false)}>Cancel</Button>
+    <Button variant="primary" disabled={!renameTitle.trim()} onclick={confirmRename}>Save</Button>
+  {/snippet}
+</Dialog>
+
+<Dialog
+  bind:open={deleteOpen}
+  title={deleteTarget ? `Delete “${deleteTarget.title}”?` : 'Delete?'}
+  description={deleteTarget?.kind === 'chapter'
+    ? 'The Chapter and every Page inside it will be deleted. This cannot be undone.'
+    : 'This Page will be deleted. This cannot be undone.'}
+>
+  <p class="plain">Nothing else in the Volume is affected.</p>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (deleteOpen = false)}>Cancel</Button>
+    <Button variant="danger" onclick={confirmDelete}>Delete</Button>
+  {/snippet}
+</Dialog>
 
 <Dialog bind:open={linkOpen} title="Link" description="Leave the field empty to remove the link.">
   <TextField
@@ -543,62 +608,99 @@
     background: var(--surface-app);
   }
 
+  /* --- Rail -------------------------------------------------------------- */
+
   .rail {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     flex: none;
     min-height: var(--rail-height);
-    padding: 0 var(--space-2);
-    background: var(--surface-pane);
-    border-bottom: var(--border-width) solid var(--border-subtle);
+    padding: 0 var(--space-1);
+    background: var(--surface-app);
+    /* No border. The sheet below provides the separation by being a different
+       surface, and a rule here would only add a line to look at. */
   }
 
-  .rail-left {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-width: 0;
-    flex: 1;
-  }
-
-  .rail-format {
-    flex: none;
-    min-width: 0;
-  }
-
+  .rail-left,
   .rail-right {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .rail-left {
     flex: 1;
   }
 
-  .breadcrumb {
+  .rail-right {
+    justify-content: flex-end;
+  }
+
+  .where {
     display: flex;
-    align-items: center;
-    gap: var(--space-1);
+    align-items: baseline;
+    gap: var(--space-2);
     min-width: 0;
-    color: var(--text-tertiary);
-    padding-left: var(--space-1);
+    padding-left: var(--space-2);
   }
 
-  .crumb {
+  .volume,
+  .chapter {
     font-size: var(--text-sm);
-    color: var(--text-secondary);
     min-width: 0;
-    padding: var(--space-1) var(--space-1);
-    border-radius: var(--radius-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .crumb.volume {
-    font-weight: var(--weight-medium);
+  .volume {
+    color: var(--text-secondary);
+  }
+
+  .volume:hover {
     color: var(--text-primary);
   }
 
-  .crumb.volume:hover {
-    background: var(--surface-hover);
+  .slash {
+    color: var(--text-tertiary);
+    flex: none;
   }
+
+  .chapter {
+    font-family: var(--font-serif);
+    color: var(--text-primary);
+  }
+
+  .words {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    padding: 0 var(--space-2);
+    white-space: nowrap;
+  }
+
+  .margin-toggle {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .tally {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  /* --- Body -------------------------------------------------------------- */
 
   .body {
     display: flex;
@@ -610,15 +712,49 @@
     flex: none;
     width: var(--pane-nav);
     min-width: 0;
-    background: var(--surface-pane);
-    border-right: var(--border-width) solid var(--border-subtle);
+    background: var(--surface-app);
   }
 
-  .editor {
+  .reading {
     flex: 1;
     min-width: 0;
     overflow-y: auto;
+    /* The desk. The sheet sits on it. */
+    background: var(--surface-app);
+  }
+
+  /* The page and the space beside it, centred as one object — which is what a
+     manuscript with margins actually looks like. */
+  .spread {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    max-width: calc(var(--measure-editor) + var(--sheet-gutter) * 2);
+    margin-inline: auto;
+    min-height: 100%;
+  }
+
+  .spread.with-margin {
+    grid-template-columns: minmax(0, 1fr) var(--pane-margin);
+    max-width: calc(var(--measure-editor) + var(--sheet-gutter) * 2 + var(--pane-margin));
+  }
+
+  /* The paper. Distinct from the desk by surface, not by a drawn border, with
+     the faintest edge so it reads as a physical sheet rather than a panel. */
+  .sheet {
     background: var(--surface-page);
+    box-shadow: var(--page-edge);
+    min-height: 100%;
+    min-width: 0;
+  }
+
+  .beside {
+    min-width: 0;
+  }
+
+  .centred {
+    display: grid;
+    place-items: center;
+    min-height: 60vh;
   }
 
   .status {
@@ -627,74 +763,12 @@
     color: var(--text-tertiary);
   }
 
-  .warning {
+  .plain {
     font-size: var(--text-md);
     color: var(--text-secondary);
   }
 
-  /* On a narrow screen the formatting controls move to the bottom, where a
-     thumb already is, rather than staying at the top out of reach. */
-  .bottom {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: none;
-    padding: var(--space-1) var(--space-2) max(var(--space-1), env(safe-area-inset-bottom));
-    background: var(--surface-pane);
-    border-top: var(--border-width) solid var(--border-subtle);
-  }
-
-  .tally {
-    margin-left: auto;
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    white-space: nowrap;
-    padding-right: var(--space-1);
-  }
-
-  .margin-pane {
-    width: var(--pane-margin);
-    border-right: none;
-    border-left: var(--border-width) solid var(--border-subtle);
-  }
-
-  .margin-overlay {
-    position: fixed;
-    inset: 0 0 0 auto;
-    z-index: var(--z-pane);
-    width: min(22rem, 90vw);
-    border-right: none;
-    border-left: var(--border-width) solid var(--border-default);
-    box-shadow: var(--shadow-overlay);
-    animation: slide-in-right var(--motion-base) var(--ease-out);
-  }
-
-  .margin-toggle {
-    position: relative;
-    display: inline-flex;
-  }
-
-  /* A count on the toggle, so a collapsed Margin still says it holds notes. */
-  .badge {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    min-width: 15px;
-    padding: 0 3px;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-    color: var(--accent-contrast);
-    font-size: 9px;
-    line-height: 15px;
-    text-align: center;
-    pointer-events: none;
-  }
-
-  @keyframes slide-in-right {
-    from {
-      transform: translateX(100%);
-    }
-  }
+  /* --- Overlays ---------------------------------------------------------- */
 
   .scrim {
     position: fixed;
@@ -706,35 +780,34 @@
 
   .overlay {
     position: fixed;
-    inset: 0 auto 0 0;
+    top: 0;
+    bottom: 0;
     z-index: var(--z-pane);
-    display: flex;
-    flex-direction: column;
-    width: min(20rem, 86vw);
-    border-right: var(--border-width) solid var(--border-default);
+    width: min(20rem, 88vw);
+    background: var(--surface-pane);
     box-shadow: var(--shadow-overlay);
-    animation: slide-in var(--motion-base) var(--ease-out);
+    overflow-y: auto;
   }
 
-  .overlay-head {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: none;
-    min-height: var(--rail-height);
-    padding: 0 var(--space-2) 0 var(--space-3);
-    border-bottom: var(--border-width) solid var(--border-subtle);
+  .overlay.left {
+    left: 0;
+    animation: slide-in-left var(--motion-base) var(--ease-out);
   }
 
-  .overlay-title {
-    flex: 1;
-    font-size: var(--text-md);
-    font-weight: var(--weight-medium);
+  .overlay.right {
+    right: 0;
+    animation: slide-in-right var(--motion-base) var(--ease-out);
   }
 
-  @keyframes slide-in {
+  @keyframes slide-in-left {
     from {
       transform: translateX(-100%);
+    }
+  }
+
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
     }
   }
 

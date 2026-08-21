@@ -40,18 +40,19 @@
   --touch-comfortable: 44px;
 
   /* ---- Layout ------------------------------------------------------------ */
-  --pane-nav: 17.5rem; /* manuscript navigation */
-  --pane-nav-min: 13rem;
-  --pane-nav-max: 26rem;
-  --pane-margin: 20rem; /* the Margin */
-  --pane-margin-min: 15rem;
-  --pane-margin-max: 30rem;
+  /* Panes are as narrow as they can be and still hold their content. Space
+     spent on chrome is space the manuscript does not get, and on a 10-inch
+     screen that trade is felt immediately. */
+  --pane-nav: 14.5rem;
+  --pane-margin: 16.5rem;
 
   /* Manuscript measure. User-configurable; this is the default and it is a
      line length, not a percentage, so a 4K display does not produce 300-
      character lines. */
-  --measure-editor: 36rem;
-  --rail-height: 44px;
+  --measure-editor: 42rem;
+  /* How far the paper extends past the text on each side. */
+  --sheet-gutter: var(--space-7);
+  --rail-height: 42px;
 
   /* ---- Z-index -----------------------------------------------------------
      Named, ordered, and exhaustive. No component invents its own. */
@@ -122,102 +123,112 @@
 [data-theme='paper'] {
   color-scheme: light;
 
-  --surface-app: #e6ded0;
-  --surface-page: #f8f3e9;
-  --surface-pane: #efe8da;
-  --surface-raised: #fcf8f0;
-  --surface-sunken: #ded5c4;
-  --surface-hover: rgb(38 33 26 / 6%);
-  --surface-active: rgb(38 33 26 / 10%);
-  --surface-selected: rgb(156 59 35 / 10%);
+  /* Four surfaces, and the order matters: the manuscript is the lightest thing
+     on screen and everything else sits back from it. The desk is darker than
+     the page; the panes are darker than the page but lighter than the desk, so
+     the sheet reads as the object in front. */
+  --surface-app: #d9cfbe;
+  --surface-page: #fbf8f1;
+  --surface-pane: #e8e0d2;
+  --surface-raised: #fdfbf6;
+  --surface-sunken: #cfc4b1;
+  --surface-hover: rgb(31 27 23 / 6%);
+  --surface-active: rgb(31 27 23 / 10%);
+  --surface-selected: rgb(47 74 104 / 9%);
 
-  --text-primary: #26211a;
-  --text-secondary: #5e5548;
-  --text-tertiary: #8b8173;
-  --text-inverse: #f8f3e9;
+  --text-primary: #1f1b17;
+  --text-secondary: #57503f;
+  --text-tertiary: #8a8171;
+  --text-inverse: #fbf8f1;
 
-  --border-subtle: rgb(38 33 26 / 9%);
-  --border-default: rgb(38 33 26 / 16%);
-  --border-strong: rgb(38 33 26 / 30%);
+  --border-subtle: rgb(31 27 23 / 8%);
+  --border-default: rgb(31 27 23 / 15%);
+  --border-strong: rgb(31 27 23 / 30%);
 
-  --accent: #9c3b23;
-  --accent-hover: #85311c;
-  --accent-quiet: rgb(156 59 35 / 12%);
-  --accent-contrast: #fdf8f1;
+  /* Ink blue. The colour writing is actually done in, and quiet enough to
+     carry a focus ring without becoming the loudest thing on screen. */
+  --accent: #2f4a68;
+  --accent-hover: #243a52;
+  --accent-quiet: rgb(47 74 104 / 11%);
+  --accent-contrast: #fbf8f1;
 
   --state-info: #3c5d78;
   --state-success: #4a6b3f;
   --state-warning: #8a6318;
-  --state-danger: #9a3320;
+  --state-danger: #8f3120;
   --state-ai: #4c4a7a;
 
-  --shadow-raised: 0 1px 2px rgb(38 33 26 / 8%), 0 4px 12px rgb(38 33 26 / 8%);
-  --shadow-overlay: 0 2px 6px rgb(38 33 26 / 10%), 0 16px 40px rgb(38 33 26 / 16%);
-  --page-edge: 0 1px 2px rgb(38 33 26 / 6%), 0 8px 28px rgb(38 33 26 / 7%);
+  --shadow-raised: 0 1px 2px rgb(31 27 23 / 8%), 0 4px 12px rgb(31 27 23 / 8%);
+  --shadow-overlay: 0 2px 6px rgb(31 27 23 / 10%), 0 16px 40px rgb(31 27 23 / 18%);
+  --page-edge: 0 0 0 1px rgb(31 27 23 / 5%), 0 1px 3px rgb(31 27 23 / 7%),
+    0 12px 32px rgb(31 27 23 / 8%);
 }
 
 [data-theme='light'] {
   color-scheme: light;
 
-  --surface-app: #e8e6e1;
-  --surface-page: #fdfcfa;
-  --surface-pane: #f4f2ee;
+  --surface-app: #dedcd6;
+  --surface-page: #fdfdfb;
+  --surface-pane: #eceae5;
   --surface-raised: #ffffff;
-  --surface-sunken: #dedbd4;
-  --surface-hover: rgb(28 27 25 / 6%);
-  --surface-active: rgb(28 27 25 / 10%);
-  --surface-selected: rgb(160 60 34 / 9%);
+  --surface-sunken: #d4d1ca;
+  --surface-hover: rgb(26 25 23 / 6%);
+  --surface-active: rgb(26 25 23 / 10%);
+  --surface-selected: rgb(45 71 100 / 9%);
 
-  --text-primary: #1c1b19;
-  --text-secondary: #56534d;
-  --text-tertiary: #83807a;
-  --text-inverse: #fdfcfa;
+  --text-primary: #1a1917;
+  --text-secondary: #52504a;
+  --text-tertiary: #807d76;
+  --text-inverse: #fdfdfb;
 
-  --border-subtle: rgb(28 27 25 / 8%);
-  --border-default: rgb(28 27 25 / 15%);
-  --border-strong: rgb(28 27 25 / 28%);
+  --border-subtle: rgb(26 25 23 / 8%);
+  --border-default: rgb(26 25 23 / 14%);
+  --border-strong: rgb(26 25 23 / 28%);
 
-  --accent: #a03c22;
-  --accent-hover: #87301a;
-  --accent-quiet: rgb(160 60 34 / 11%);
-  --accent-contrast: #fffdfa;
+  --accent: #2d4764;
+  --accent-hover: #22374e;
+  --accent-quiet: rgb(45 71 100 / 10%);
+  --accent-contrast: #fdfdfb;
 
   --state-info: #35576f;
   --state-success: #44643a;
   --state-warning: #825d16;
-  --state-danger: #9c3520;
+  --state-danger: #92321f;
   --state-ai: #4a4877;
 
   --shadow-raised: 0 1px 2px rgb(20 19 17 / 8%), 0 4px 12px rgb(20 19 17 / 7%);
-  --shadow-overlay: 0 2px 6px rgb(20 19 17 / 10%), 0 16px 40px rgb(20 19 17 / 14%);
-  --page-edge: 0 1px 2px rgb(20 19 17 / 5%), 0 8px 28px rgb(20 19 17 / 6%);
+  --shadow-overlay: 0 2px 6px rgb(20 19 17 / 10%), 0 16px 40px rgb(20 19 17 / 16%);
+  --page-edge: 0 0 0 1px rgb(20 19 17 / 4%), 0 1px 3px rgb(20 19 17 / 6%),
+    0 12px 32px rgb(20 19 17 / 7%);
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --surface-app: #121110;
-  --surface-page: #1d1a17;
-  --surface-pane: #191715;
-  --surface-raised: #262220;
-  --surface-sunken: #0e0d0c;
-  --surface-hover: rgb(231 224 212 / 7%);
-  --surface-active: rgb(231 224 212 / 12%);
-  --surface-selected: rgb(210 121 90 / 14%);
+  /* The same order inverted: the page is the lightest surface, the desk the
+     darkest, so the manuscript still reads as the thing in front. */
+  --surface-app: #0f0d0c;
+  --surface-page: #201c18;
+  --surface-pane: #171412;
+  --surface-raised: #272320;
+  --surface-sunken: #0b0a09;
+  --surface-hover: rgb(233 226 214 / 7%);
+  --surface-active: rgb(233 226 214 / 12%);
+  --surface-selected: rgb(139 173 208 / 13%);
 
-  --text-primary: #e7e0d4;
+  --text-primary: #e9e2d6;
   --text-secondary: #a8a093;
   --text-tertiary: #7b7369;
   --text-inverse: #17140f;
 
-  --border-subtle: rgb(231 224 212 / 9%);
-  --border-default: rgb(231 224 212 / 15%);
-  --border-strong: rgb(231 224 212 / 28%);
+  --border-subtle: rgb(233 226 214 / 9%);
+  --border-default: rgb(233 226 214 / 15%);
+  --border-strong: rgb(233 226 214 / 28%);
 
-  --accent: #d2795a;
-  --accent-hover: #e08b6c;
-  --accent-quiet: rgb(210 121 90 / 16%);
-  --accent-contrast: #1b1512;
+  --accent: #8bacd0;
+  --accent-hover: #a2bfdd;
+  --accent-quiet: rgb(139 172 208 / 15%);
+  --accent-contrast: #14181e;
 
   --state-info: #7fa6c4;
   --state-success: #8fb07e;
@@ -227,7 +238,8 @@
 
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 34%);
   --shadow-overlay: 0 2px 8px rgb(0 0 0 / 46%), 0 18px 44px rgb(0 0 0 / 50%);
-  --page-edge: 0 1px 2px rgb(0 0 0 / 30%), 0 10px 30px rgb(0 0 0 / 28%);
+  --page-edge: 0 0 0 1px rgb(233 226 214 / 5%), 0 1px 3px rgb(0 0 0 / 34%),
+    0 12px 32px rgb(0 0 0 / 30%);
 }
 
 /* Night is Dark taken further down: less contrast, warmer text, quieter edges.
@@ -235,14 +247,14 @@
 [data-theme='night'] {
   color-scheme: dark;
 
-  --surface-app: #0b0a09;
-  --surface-page: #141210;
-  --surface-pane: #100f0e;
+  --surface-app: #070706;
+  --surface-page: #161310;
+  --surface-pane: #0e0d0b;
   --surface-raised: #1c1917;
-  --surface-sunken: #070706;
+  --surface-sunken: #050504;
   --surface-hover: rgb(207 197 180 / 6%);
   --surface-active: rgb(207 197 180 / 10%);
-  --surface-selected: rgb(196 121 94 / 12%);
+  --surface-selected: rgb(126 158 191 / 12%);
 
   --text-primary: #cbc1b0;
   --text-secondary: #8d8577;
@@ -253,10 +265,10 @@
   --border-default: rgb(207 197 180 / 12%);
   --border-strong: rgb(207 197 180 / 24%);
 
-  --accent: #c4795e;
-  --accent-hover: #d18a6e;
-  --accent-quiet: rgb(196 121 94 / 14%);
-  --accent-contrast: #14100e;
+  --accent: #7e9ebf;
+  --accent-hover: #92b0cf;
+  --accent-quiet: rgb(126 158 191 / 13%);
+  --accent-contrast: #101418;
 
   --state-info: #7096b2;
   --state-success: #7f9e70;
@@ -266,7 +278,8 @@
 
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 46%), 0 4px 14px rgb(0 0 0 / 38%);
   --shadow-overlay: 0 2px 8px rgb(0 0 0 / 52%), 0 18px 44px rgb(0 0 0 / 56%);
-  --page-edge: 0 1px 2px rgb(0 0 0 / 34%), 0 10px 30px rgb(0 0 0 / 30%);
+  --page-edge: 0 0 0 1px rgb(207 197 180 / 4%), 0 1px 3px rgb(0 0 0 / 40%),
+    0 12px 32px rgb(0 0 0 / 34%);
 }
 
 /* =========================================================================

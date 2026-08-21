@@ -171,6 +171,8 @@
 <style>
   .host {
     display: contents;
+    /* Quiet enough to read past, present enough to notice. */
+    --annotation-ink: color-mix(in srgb, var(--text-tertiary) 70%, transparent);
   }
 
   /* ProseMirror renders its own DOM, so the manuscript's typography lives in
@@ -179,16 +181,27 @@
   :global(.manuscript) {
     max-width: var(--measure-editor);
     margin-inline: auto;
-    /* Deep bottom padding so the line being written is never pinned to the
-       bottom edge of the window. */
-    padding: var(--space-7) var(--space-5) 40vh;
+    /* Enough room below the last line to type without it sitting on the edge
+       of the window. This used to be 40vh, which on a short Page left a void
+       taller than the writing and made the column look unfinished; the sheet
+       behind it now carries that space as blank paper instead. */
+    padding: var(--space-7) var(--space-5) 24vh;
     min-height: 100%;
     font-family: var(--font-manuscript);
     font-size: var(--manuscript-size);
     line-height: var(--manuscript-leading);
     color: var(--text-primary);
-    outline: none;
     overflow-wrap: break-word;
+  }
+
+  /* No focus ring on the manuscript. The global rule would draw a two-pixel
+     accent outline down both edges of the sheet for as long as the writer is
+     typing — and a blinking caret in the text already says where focus is far
+     better than a box around the page. */
+  :global(.manuscript),
+  :global(.manuscript:focus),
+  :global(.manuscript:focus-visible) {
+    outline: none;
   }
 
   /* Reset every top-level block, then space them apart. Both selectors carry
@@ -290,47 +303,31 @@
   }
 
   /* Annotated text.
-     An underline rather than a highlighter fill: a page with a dozen notes on
-     it must still read as prose, and a block of colour behind a sentence
-     fights the words for attention. */
+     A single ink for every kind. Six colours under six phrases turns a page of
+     prose into a legend, and which *sort* of note it is can be read in the
+     Margin beside it. The one thing colour still says is that an anchor has
+     come unstuck, because that is the one thing needing a decision. */
   :global(.manuscript .annotated) {
     background: none;
-    border-bottom: 2px solid var(--annotation-tint, var(--text-tertiary));
-    /* Sits just clear of descenders, so the rule does not cut through a "g". */
+    border-bottom: 1px solid var(--annotation-ink);
     padding-bottom: 1px;
+    /* Under the descenders rather than through them. */
+    text-decoration: none;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background-color var(--motion-fast) var(--ease-out);
   }
 
-  :global(.manuscript .annotated-note) {
-    --annotation-tint: var(--text-tertiary);
-  }
-
-  :global(.manuscript .annotated-question) {
-    --annotation-tint: var(--state-info);
-  }
-
-  :global(.manuscript .annotated-suggestion) {
-    --annotation-tint: var(--state-success);
-  }
-
-  :global(.manuscript .annotated-warning) {
-    --annotation-tint: var(--state-warning);
-  }
-
-  :global(.manuscript .annotated-reference),
-  :global(.manuscript .annotated-ai-review),
-  :global(.manuscript .annotated-ai-suggestion) {
-    --annotation-tint: var(--state-ai);
-  }
-
-  /* A stale anchor is drawn dotted: the note is still there, but Grimoire is
-     no longer certain these are the words it meant. */
   :global(.manuscript .annotated-stale) {
     border-bottom-style: dotted;
-    opacity: 0.7;
+    border-bottom-color: var(--state-warning);
   }
 
   :global(.manuscript .annotated-focused) {
     background: var(--accent-quiet);
+    border-bottom-width: 2px;
+    border-bottom-color: var(--accent);
     border-radius: 2px;
   }
+
 </style>

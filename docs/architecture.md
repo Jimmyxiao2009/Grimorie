@@ -46,6 +46,10 @@ Grimoire is a single-process desktop application. There is no server, no sync, n
 
 The boundary rule is: **Rust owns durability, the WebView owns interaction.**
 
+Formatting lives over the selection rather than in a permanent strip. A toolbar across the
+top spends the most valuable row on screen on controls that are idle most of the time, and
+makes a writing application look like a word processor.
+
 | Concern | Owner | Rationale |
 | --- | --- | --- |
 | Rich text editing, selection, IME | WebView | Browsers are the best text editors ever built. |
@@ -124,6 +128,18 @@ Breakpoints change *what exists*, not merely how wide it is.
 
 Surface Go portrait (≈768 CSS px at 150% scaling) lands in Narrow; landscape (≈1024) lands
 in Medium. Both are primary targets, not degraded fallbacks.
+
+The Margin is not a sidebar. Where it is a pane, it shares one scroll container with the
+manuscript and each anchored note is positioned level with the words it refers to; notes
+that would collide are pushed down only as far as they must go to clear the one above.
+That vertical relationship is the whole difference between a marginal note and a comment
+in a panel, and it is why the notes are laid out in a single pass from the sheet's own
+origin rather than in normal flow.
+
+Where the Margin can only be an overlay there is nothing beside it to align to, so notes
+fall back to reading order — the alignment belongs to sitting next to the text, not to the
+note. The pane's open state is remembered; the overlay's is not, because restoring it
+would cover the writer's text with notes the moment they opened the app.
 
 Touch targets are ≥ 40px. No action is reachable only by hover, drag, or right-click —
 gestures are accelerators layered over controls that already exist.

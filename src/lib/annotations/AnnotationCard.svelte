@@ -1,12 +1,20 @@
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
   import Menu from '$lib/components/Menu.svelte';
   import SuggestionActions from './SuggestionActions.svelte';
   import { ai } from '$lib/stores/ai.svelte';
   import { relativeTime } from '$lib/utils/format';
-  import { KIND_LABELS, KIND_TOKENS, anchorOf, type Annotation } from '$lib/types/annotation';
-  import type { IconName } from '$lib/design/icons';
+  import { KIND_GLYPHS, KIND_LABELS, anchorOf, type Annotation } from '$lib/types/annotation';
   import type { MenuItem } from '$lib/types/ui';
+
+  /**
+   * One note in the Margin.
+   *
+   * Not a card. There is no box, no fill, and no coloured spine — a marginal
+   * note is text written beside text, and the only structure it needs is a
+   * mark, a rule, and a smaller size than the manuscript it comments on. The
+   * card treatment this replaced turned six notes into six tiles and made the
+   * Margin compete with the writing it was supposed to serve.
+   */
 
   interface Props {
     annotation: Annotation;
@@ -15,9 +23,7 @@
     onedit: (annotation: Annotation) => void;
     onresolve: (annotation: Annotation) => void;
     ondelete: (annotation: Annotation) => void;
-    /** Scrolls the manuscript to the anchored text. */
     onreveal: (annotation: Annotation) => void;
-    /** Called after a suggestion is applied, so the Page can be reloaded. */
     onapplied?: () => void;
   }
 
@@ -25,20 +31,9 @@
     $props();
 
   const suggestion = $derived(ai.suggestionFor(annotation.id));
-
   const anchor = $derived(anchorOf(annotation));
   const resolved = $derived(annotation.status === 'resolved');
   const stale = $derived(annotation.status === 'stale');
-
-  const icons: Record<string, IconName> = {
-    note: 'margin',
-    question: 'question',
-    suggestion: 'checkCircle',
-    warning: 'warning',
-    reference: 'external',
-    'ai-review': 'sparkle',
-    'ai-suggestion': 'sparkle'
-  };
 
   const actions = $derived<MenuItem[]>([
     { id: 'edit', label: 'Edit', icon: 'pencil', select: () => onedit(annotation) },
@@ -53,153 +48,155 @@
   ]);
 </script>
 
-<article
-  class="card"
-  class:focused
-  class:resolved
-  class:stale
-  style:--kind="var({KIND_TOKENS[annotation.kind]})"
->
-  <header>
-    <span class="kind">
-      <Icon name={icons[annotation.kind] ?? 'margin'} size={15} />
-      <span>{KIND_LABELS[annotation.kind]}</span>
-    </span>
-    <span class="when">{relativeTime(annotation.updatedAt)}</span>
-    <Menu items={actions} label="Note actions" size="sm" />
-  </header>
+<article class="note" class:focused class:resolved class:stale>
+  <!-- The rule is the note's tie to the manuscript: it runs up the left edge,
+       and on an anchored note it starts level with the words it refers to. -->
+  <span class="rule" aria-hidden="true"></span>
 
-  {#if anchor}
-    <!-- The anchored words, so a note in the Margin is readable without
-         hunting for what it points at. -->
-    <button type="button" class="quoted" onclick={() => onreveal(annotation)}>
-      <span class="quoted-text">{anchor.selectedText}</span>
-    </button>
-  {/if}
-
-  {#if stale}
-    <p class="stale-note">
-      <Icon name="warning" size={14} />
-      <span>The text this pointed at has changed. The note has been kept.</span>
-    </p>
-  {/if}
-
-  <button type="button" class="body selectable" onclick={() => onfocus(annotation.id)}>
-    {annotation.body}
+  <button
+    type="button"
+    class="face"
+    onclick={() => {
+      onfocus(annotation.id);
+      if (anchor) onreveal(annotation);
+    }}
+  >
+    <span class="mark" aria-hidden="true">{KIND_GLYPHS[annotation.kind]}</span>
+    <span class="text selectable">{annotation.body}</span>
   </button>
+
+  <div class="menu">
+    <Menu items={actions} label="{KIND_LABELS[annotation.kind]} actions" size="sm" />
+  </div>
 
   {#if suggestion}
     <SuggestionActions {suggestion} onapplied={() => onapplied?.()} />
   {/if}
 
-  {#if annotation.authorProfile}
-    <p class="author">{annotation.authorProfile}</p>
-  {/if}
+  <p class="meta">
+    {#if stale}
+      <span class="unstuck">Text changed</span>
+    {/if}
+    {#if annotation.authorProfile}
+      <span class="author">{annotation.authorProfile}</span>
+    {/if}
+    <span class="when">{relativeTime(annotation.updatedAt)}</span>
+  </p>
 </article>
 
 <style>
-  .card {
+  .note {
     position: relative;
-    padding: var(--space-3);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
-    border: var(--border-width) solid var(--border-subtle);
-    /* The kind is carried by a spine rather than a filled background, so a
-       Margin of six notes does not read as six coloured blocks. */
-    border-left: 2px solid var(--kind);
-    transition:
-      border-color var(--motion-fast) var(--ease-out),
-      background-color var(--motion-fast) var(--ease-out);
+    padding: var(--space-1) var(--space-2) var(--space-3) var(--space-3);
   }
 
-  .card.focused {
-    border-color: var(--accent);
-    border-left-color: var(--kind);
-    background: var(--surface-page);
+  .rule {
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: var(--space-3);
+    width: 1px;
+    background: var(--border-default);
+    transition: background-color var(--motion-fast) var(--ease-out);
   }
 
-  .card.resolved {
-    opacity: 0.6;
+  .focused .rule {
+    width: 2px;
+    background: var(--accent);
   }
 
-  .card.stale {
-    border-left-style: dashed;
+  /* An unstuck anchor is the one thing colour is spent on, because it is the
+     one thing the writer has to decide about. */
+  .stale .rule {
+    background: var(--state-warning);
+    /* A broken rule, for an note whose text is gone. */
+    background-image: repeating-linear-gradient(
+      to bottom,
+      var(--state-warning) 0 3px,
+      transparent 3px 6px
+    );
   }
 
-  header {
-    display: flex;
-    align-items: center;
+  .resolved {
+    opacity: 0.5;
+  }
+
+  .face {
+    display: grid;
+    grid-template-columns: 1.1rem 1fr;
     gap: var(--space-2);
-    margin-bottom: var(--space-2);
-  }
-
-  .kind {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    color: var(--kind);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-  }
-
-  .when {
-    flex: 1;
-    text-align: right;
-    font-size: var(--text-2xs);
-    color: var(--text-tertiary);
-    white-space: nowrap;
-  }
-
-  .quoted {
-    display: block;
     width: 100%;
+    padding: var(--space-1) var(--space-5) var(--space-1) 0;
     text-align: left;
-    margin-bottom: var(--space-2);
-    padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
   }
 
-  .quoted:hover {
-    background: var(--surface-hover);
-  }
-
-  .quoted-text {
-    font-family: var(--font-manuscript);
-    font-size: var(--text-sm);
-    font-style: italic;
-    color: var(--text-secondary);
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .stale-note {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-2);
-    margin-bottom: var(--space-2);
-    color: var(--state-warning);
-    font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-  }
-
-  .body {
-    display: block;
-    width: 100%;
-    text-align: left;
+  .mark {
+    font-family: var(--font-serif);
     font-size: var(--text-md);
-    line-height: var(--leading-snug);
-    color: var(--text-primary);
+    line-height: 1.5;
+    color: var(--text-tertiary);
+    text-align: center;
+  }
+
+  .focused .mark {
+    color: var(--accent);
+  }
+
+  /* Set in the manuscript face but noticeably smaller, so the Margin reads as
+     an aside in the same hand rather than as interface text. */
+  .text {
+    font-family: var(--font-manuscript);
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
     white-space: pre-wrap;
     overflow-wrap: break-word;
   }
 
-  .author {
-    margin-top: var(--space-2);
+  .focused .text {
+    color: var(--text-primary);
+  }
+
+  .menu {
+    position: absolute;
+    top: 0;
+    right: 0;
+    opacity: 0;
+    transition: opacity var(--motion-fast) var(--ease-out);
+  }
+
+  /* Revealed on hover, on focus, and whenever the note is the focused one —
+     so a tablet, which has no hover, reaches it by tapping the note first. */
+  .note:hover .menu,
+  .menu:focus-within,
+  .focused .menu {
+    opacity: 1;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+    padding-left: calc(1.1rem + var(--space-2));
     font-size: var(--text-2xs);
     color: var(--text-tertiary);
+  }
+
+  .meta:empty {
+    display: none;
+  }
+
+  .unstuck {
+    color: var(--state-warning);
+  }
+
+  .author {
+    font-style: italic;
+  }
+
+  .when {
+    margin-left: auto;
   }
 </style>

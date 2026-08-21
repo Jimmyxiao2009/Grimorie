@@ -68,13 +68,23 @@ export const KIND_LABELS: Record<AnnotationKind, string> = {
   'ai-suggestion': 'AI suggestion'
 };
 
-/** The token each kind is tinted with. Kept here so the Margin never inlines a colour. */
-export const KIND_TOKENS: Record<AnnotationKind, string> = {
-  note: '--text-tertiary',
-  question: '--state-info',
-  suggestion: '--state-success',
-  warning: '--state-warning',
-  reference: '--state-ai',
-  'ai-review': '--state-ai',
-  'ai-suggestion': '--state-ai'
+/**
+ * The mark that identifies a kind in the Margin.
+ *
+ * A glyph rather than a colour. Six tinted cards down one column reads as a
+ * dashboard; six marginal notes distinguished by a sign in front of them reads
+ * as someone's handwriting. Colour is left to say one thing only — whether an
+ * anchor has come unstuck — instead of being spent on taxonomy.
+ *
+ * AI notes take the same marks as their human equivalents, because an AI is an
+ * author, not a category. The attribution line under the note says who wrote it.
+ */
+export const KIND_GLYPHS: Record<AnnotationKind, string> = {
+  note: '—',
+  question: '?',
+  suggestion: '↗',
+  warning: '!',
+  reference: '§',
+  'ai-review': '—',
+  'ai-suggestion': '↗'
 };

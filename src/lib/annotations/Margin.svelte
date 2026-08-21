@@ -1,41 +1,52 @@
 <script lang="ts">
   import AnnotationCard from './AnnotationCard.svelte';
+  import AskGrimoire from './AskGrimoire.svelte';
+  import TagRow from './TagRow.svelte';
   import Button from '$lib/components/Button.svelte';
   import Dialog from '$lib/components/Dialog.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
   import Icon from '$lib/components/Icon.svelte';
-  import IconButton from '$lib/components/IconButton.svelte';
   import TextField from '$lib/components/TextField.svelte';
-  import TagRow from './TagRow.svelte';
-  import AskGrimoire from './AskGrimoire.svelte';
   import { ai } from '$lib/stores/ai.svelte';
   import { margin } from '$lib/stores/margin.svelte';
   import {
     AUTHORABLE_KINDS,
+    KIND_GLYPHS,
     KIND_LABELS,
+    anchorOf,
     type Annotation,
     type AnnotationKind
   } from '$lib/types/annotation';
 
+  /**
+   * The Margin: notes in the space beside the manuscript.
+   *
+   * Anchored notes sit level with the words they refer to, and scroll with
+   * them, because that vertical relationship is what makes a marginal note a
+   * marginal note rather than a comment in a sidebar. Notes that would overlap
+   * are pushed down just far enough to clear each other, which is what a
+   * person writing in a real margin does too.
+   *
+   * Whole-Page notes have nothing to sit level with, so they gather at the top
+   * under a heading that says as much.
+   */
+
   interface Props {
     pageId: string | null;
-    /** The current selection in plain-text offsets, or null if nothing is selected. */
     selection: { from: number; to: number; text: string } | null;
+    /** Vertical offset, in content pixels, of each anchored note's text. */
+    offsets: Map<string, number>;
+    /** Height of the manuscript content, so the rail can match it. */
+    contentHeight: number;
     onreveal: (annotation: Annotation) => void;
-    /** Shown on narrow layouts, where the Margin is an overlay. */
-    onclose?: () => void;
-    /** Called after an AI suggestion is applied, so the Page can reload. */
     onapplied?: () => void;
   }
 
-  let { pageId, selection, onreveal, onclose, onapplied }: Props = $props();
+  let { pageId, selection, offsets, contentHeight, onreveal, onapplied }: Props = $props();
 
   let askOpen = $state(false);
-
   let composing = $state(false);
   let composeKind = $state<AnnotationKind>('note');
   let composeBody = $state('');
-  /** Captured when composing opens: the selection moves as soon as focus does. */
   let composeRange = $state<{ from: number; to: number; text: string } | null>(null);
 
   let editing = $state(false);
@@ -45,15 +56,103 @@
   let deleting = $state(false);
   let deleteTarget = $state<Annotation | null>(null);
 
+  /** Measured heights, so notes can be stacked without overlapping. */
+  let heights = $state<Map<string, number>>(new Map());
+
   const hasSelection = $derived(selection !== null && selection.to > selection.from);
 
-  function beginNote() {
-    // The selection is read *now* and held, because opening a dialog moves
-    // focus and the editor's selection collapses the moment it does.
+  const loose = $derived(margin.visible.filter((note) => anchorOf(note) === null));
+  const anchored = $derived(margin.visible.filter((note) => anchorOf(note) !== null));
+
+  /**
+   * Where the Margin is an overlay rather than a pane, it has no manuscript
+   * beside it to line up with, so notes stack in reading order instead. The
+   * alignment is a property of sitting next to the text, not of the note.
+   */
+  const stacked = $derived(contentHeight === 0);
+
+  /** Gap kept between two notes that would otherwise collide. */
+  const GAP = 12;
+  /** Assumed height for a note that has not been measured yet. */
+  const ASSUMED = 64;
+
+  /**
+   * Lays out everything in the Margin in one pass.
+   *
+   * Every entry asks for a height: a whole-Page note and the streaming answer
+   * ask for the top, an anchored note asks for the line its words are on. They
+   * are then placed in order, each pushed down only as far as it must go to
+   * clear the one above — which is what a person writing in a real margin does
+   * when two notes want the same inch of paper.
+   *
+   * Doing this in one pass, from a single origin, is what keeps a note level
+   * with its text. Laying the page-level notes out in normal flow first, as an
+   * earlier version did, silently pushed every anchored note down by their
+   * height and broke the alignment the Margin exists for.
+   */
+  const layout = $derived.by(() => {
+    const tops = new Map<string, number>();
+    let floor = 0;
+
+    const place = (id: string, at: number) => {
+      const top = Math.max(at, floor);
+      tops.set(id, top);
+      floor = top + (heights.get(id) ?? ASSUMED) + GAP;
+    };
+
+    // Anchored notes are laid out first and get the positions they asked for.
+    // Anything placed before them would push them off the lines they belong
+    // to, and being level with its text is the whole of what makes a marginal
+    // note one.
+    // A note whose anchor could not be measured this frame still gets a
+    // position, below the ones that could. Dropping it would make a note
+    // disappear for a reason the writer cannot see — and in the overlay, where
+    // there is nothing to measure against, it would hide all of them.
+    const measured = anchored
+      .map((note) => ({ id: note.id, at: offsets.get(note.id) }))
+      .filter((entry): entry is { id: string; at: number } => entry.at !== undefined)
+      .sort((a, b) => a.at - b.at);
+    for (const entry of measured) place(entry.id, entry.at);
+
+    for (const note of anchored) {
+      if (!tops.has(note.id)) place(note.id, floor);
+    }
+
+    // Then the things with no line of their own, after the last of them —
+    // where a note about the whole page belongs anyway.
+    if (ai.isStreaming) place(STREAM_ID, floor);
+    for (const note of loose) place(note.id, floor);
+
+    return { tops, tail: floor };
+  });
+
+  const STREAM_ID = '__streaming';
+
+  function measure(node: HTMLElement, id: string) {
+    const observer = new ResizeObserver(() => {
+      const next = new Map(heights);
+      next.set(id, node.offsetHeight);
+      heights = next;
+    });
+    observer.observe(node);
+    return {
+      destroy() {
+        observer.disconnect();
+      }
+    };
+  }
+
+  export function beginNote() {
+    // Read the selection now: opening a dialog moves focus and the editor's
+    // selection collapses the instant it does.
     composeRange = hasSelection ? selection : null;
     composeKind = 'note';
     composeBody = '';
     composing = true;
+  }
+
+  export function beginAsk() {
+    askOpen = true;
   }
 
   async function submitNote() {
@@ -61,7 +160,6 @@
     if (!pageId || !body) return;
     const range = composeRange;
     composing = false;
-
     if (range) await margin.createAnchored(pageId, composeKind, body, range.from, range.to);
     else await margin.createForPage(pageId, composeKind, body);
   }
@@ -80,11 +178,6 @@
     await margin.updateBody(target.id, body);
   }
 
-  function beginDelete(annotation: Annotation) {
-    deleteTarget = annotation;
-    deleting = true;
-  }
-
   async function confirmDelete() {
     const target = deleteTarget;
     if (!target) return;
@@ -98,96 +191,67 @@
   }
 </script>
 
-<section class="margin" aria-label="Margin">
-  <header class="head">
-    <h2 class="eyebrow">Margin</h2>
-    {#if margin.openCount > 0}
-      <span class="tally tabular">{margin.openCount}</span>
-    {/if}
-    <div class="head-actions">
-      <IconButton
-        name="eye"
-        label={margin.showResolved ? 'Hide resolved notes' : 'Show resolved notes'}
-        size="sm"
-        pressed={margin.showResolved}
-        onclick={() => (margin.showResolved = !margin.showResolved)}
-      />
-      {#if onclose}
-        <IconButton name="close" label="Close the Margin" size="sm" onclick={onclose} />
-      {/if}
-    </div>
-  </header>
-
-  <div class="notes" data-scroll>
-    {#if ai.isStreaming}
+<div
+  class="margin"
+  class:stacked
+  aria-label="Margin"
+  style:min-height="{Math.max(contentHeight, layout.tail + 40)}px"
+>
+  {#if ai.isStreaming}
+    <!-- The answer as it arrives. Provisional, so it is drawn as unfinished
+         handwriting rather than as a saved note. -->
+    <div
+      class="placed"
+      style:top={stacked ? undefined : `${layout.tops.get(STREAM_ID) ?? 0}px`}
+      use:measure={STREAM_ID}
+    >
       <div class="streaming" aria-live="polite">
-        <header class="streaming-head">
-          <Icon name="sparkle" size={14} />
-          <span class="streaming-title">
-            {ai.running?.profileName ?? 'Reading'} · {ai.running?.actionLabel ?? ''}
-          </span>
+        <p class="streaming-head">
+          <span>{ai.running?.profileName ?? 'Reading'} · {ai.running?.actionLabel ?? ''}</span>
           <button type="button" class="stop" onclick={() => ai.cancel()}>Stop</button>
-        </header>
+        </p>
         <p class="streaming-body selectable">
-          {ai.streamed}{#if ai.streamed === ''}Reading the passage…{/if}
+          {ai.streamed}{#if ai.streamed === ''}Reading…{/if}
         </p>
       </div>
-    {/if}
+    </div>
+  {/if}
 
-    {#if margin.loading}
-      <p class="status">Reading the Margin…</p>
-    {:else if margin.visible.length === 0}
-      <EmptyState
-        size="sm"
-        title="No margin notes yet."
-        hint={hasSelection
-          ? 'Add a note about the text you have selected.'
-          : 'Select some text in the manuscript, then leave a note about it.'}
-      />
-    {:else}
-      {#each margin.visible as annotation (annotation.id)}
+  {#each [...anchored, ...loose] as note (note.id)}
+    {@const top = layout.tops.get(note.id)}
+    {#if top !== undefined}
+      <div class="placed" style:top={stacked ? undefined : `${top}px`} use:measure={note.id}>
         <AnnotationCard
-          {annotation}
-          focused={margin.focusedId === annotation.id}
+          annotation={note}
+          focused={margin.focusedId === note.id}
           onfocus={(id) => (margin.focusedId = margin.focusedId === id ? null : id)}
           onedit={beginEdit}
           onresolve={toggleResolved}
-          ondelete={beginDelete}
+          ondelete={(target) => {
+            deleteTarget = target;
+            deleting = true;
+          }}
           {onreveal}
           onapplied={() => onapplied?.()}
         />
-      {/each}
+      </div>
     {/if}
+  {/each}
+
+  {#if margin.visible.length === 0 && !ai.isStreaming}
+    <p class="blank">
+      {hasSelection
+        ? 'Leave a note about the selected text.'
+        : 'Select a passage to write beside it.'}
+    </p>
+  {/if}
+
+  <div class="tags" style:top={stacked ? undefined : `${layout.tail + 8}px`}>
+    <TagRow {pageId} />
   </div>
+</div>
 
-  <TagRow {pageId} />
-
-  <footer class="foot">
-    <Button variant="secondary" size="sm" icon="plus" block disabled={!pageId} onclick={beginNote}>
-      {hasSelection ? 'Note on selection' : 'Note on this Page'}
-    </Button>
-
-    {#if ai.isConfigured}
-      <Button
-        variant="ghost"
-        size="sm"
-        icon="sparkle"
-        block
-        disabled={!pageId || !hasSelection || ai.isStreaming}
-        onclick={() => (askOpen = true)}
-      >
-        {hasSelection ? 'Ask Grimoire' : 'Select text to ask'}
-      </Button>
-    {/if}
-  </footer>
-</section>
-
-<AskGrimoire
-  bind:open={askOpen}
-  {pageId}
-  {selection}
-  oncomplete={() => {}}
-/>
+<AskGrimoire bind:open={askOpen} {pageId} {selection} oncomplete={() => {}} />
 
 <Dialog
   bind:open={composing}
@@ -198,7 +262,7 @@
       <blockquote class="quoted selectable">{composeRange.text}</blockquote>
     {/if}
 
-    <fieldset class="kinds">
+    <fieldset>
       <legend class="eyebrow">Kind</legend>
       <div class="chips">
         {#each AUTHORABLE_KINDS as kind (kind)}
@@ -209,6 +273,7 @@
             aria-pressed={composeKind === kind}
             onclick={() => (composeKind = kind)}
           >
+            <span class="chip-mark">{KIND_GLYPHS[kind]}</span>
             {KIND_LABELS[kind]}
           </button>
         {/each}
@@ -237,7 +302,7 @@
   title="Delete this note?"
   description="The manuscript itself is not affected."
 >
-  <p class="note-preview">{deleteTarget?.body ?? ''}</p>
+  <p class="quoted">{deleteTarget?.body ?? ''}</p>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (deleting = false)}>Cancel</Button>
     <Button variant="danger" onclick={confirmDelete}>Delete</Button>
@@ -246,110 +311,82 @@
 
 <style>
   .margin {
+    position: relative;
+    /* No padding: the top of this element is the top of the sheet beside it,
+       and every note's offset is measured from there. Padding here would shift
+       every note away from the line it belongs to. */
+    padding-right: var(--space-3);
+    padding-left: var(--space-2);
+  }
+
+  .placed {
+    position: absolute;
+    left: var(--space-2);
+    right: var(--space-3);
+    transition: top var(--motion-base) var(--ease-out);
+  }
+
+  .tags {
+    position: absolute;
+    left: var(--space-2);
+    right: var(--space-3);
+  }
+
+  /* As an overlay there is no manuscript alongside to line up with, so notes
+     fall back to reading order. The alignment belongs to sitting beside the
+     text, not to the note. */
+  .margin.stacked {
     display: flex;
     flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--surface-pane);
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-3);
   }
 
-  .head {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: none;
-    min-height: var(--rail-height);
-    padding: 0 var(--space-2) 0 var(--space-3);
-    border-bottom: var(--border-width) solid var(--border-subtle);
+  .margin.stacked .placed,
+  .margin.stacked .tags {
+    position: static;
+    left: auto;
+    right: auto;
   }
 
-  .head h2 {
-    flex: none;
-  }
-
-  .tally {
-    padding: 1px var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--surface-active);
-    color: var(--text-secondary);
-    font-size: var(--text-2xs);
-  }
-
-  .head-actions {
-    display: flex;
-    align-items: center;
-    margin-left: auto;
-  }
-
-  .notes {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-3) var(--space-5);
-  }
-
-  .status {
-    padding: var(--space-4);
-    color: var(--text-tertiary);
+  .blank {
+    padding: var(--space-5) var(--space-3);
     font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+    color: var(--text-tertiary);
   }
 
-  .foot {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    flex: none;
-    padding: var(--space-2);
-    border-top: var(--border-width) solid var(--border-subtle);
-  }
-
-  /* The answer as it arrives, above the settled notes. It is not a card yet —
-     nothing has been saved — so it is drawn as a dashed provisional block. */
   .streaming {
-    padding: var(--space-3);
-    border-radius: var(--radius-md);
-    border: var(--border-width) dashed var(--state-ai);
-    background: var(--surface-raised);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-4);
+    border-left: 2px dashed var(--state-ai);
   }
 
   .streaming-head {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: var(--space-2);
-    margin-bottom: var(--space-2);
+    margin-bottom: var(--space-1);
+    font-size: var(--text-2xs);
     color: var(--state-ai);
   }
 
-  .streaming-title {
-    flex: 1;
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .stop {
-    font-size: var(--text-xs);
+    margin-left: auto;
+    font-size: var(--text-2xs);
     color: var(--text-tertiary);
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-sm);
   }
 
   .stop:hover {
-    background: var(--surface-hover);
     color: var(--state-danger);
   }
 
   .streaming-body {
-    font-size: var(--text-md);
-    line-height: var(--leading-snug);
-    color: var(--text-primary);
+    font-family: var(--font-manuscript);
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
     white-space: pre-wrap;
-    overflow-wrap: break-word;
   }
 
   .form {
@@ -369,6 +406,7 @@
     color: var(--text-secondary);
     max-height: 8rem;
     overflow-y: auto;
+    white-space: pre-wrap;
   }
 
   fieldset {
@@ -389,6 +427,9 @@
   }
 
   .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     min-height: var(--touch-min);
     padding: 0 var(--space-3);
     border-radius: var(--radius-md);
@@ -397,8 +438,9 @@
     color: var(--text-secondary);
   }
 
-  .chip:hover {
-    background: var(--surface-hover);
+  .chip-mark {
+    font-family: var(--font-serif);
+    color: var(--text-tertiary);
   }
 
   .chip.selected {
@@ -407,12 +449,7 @@
     color: var(--accent-contrast);
   }
 
-  .note-preview {
-    padding: var(--space-3);
-    background: var(--surface-page);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-md);
-    color: var(--text-secondary);
-    white-space: pre-wrap;
+  .chip.selected .chip-mark {
+    color: var(--accent-contrast);
   }
 </style>

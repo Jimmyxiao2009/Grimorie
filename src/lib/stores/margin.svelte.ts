@@ -26,7 +26,14 @@ function restorePaneOpen(): boolean {
 
 class MarginStore {
   annotations = $state<Annotation[]>([]);
-  /** Whether the Margin is shown, remembered across sessions. */
+  /**
+   * Whether the Margin sits beside the manuscript, remembered across sessions.
+   *
+   * This governs the *pane* only. Where the Margin can only be an overlay, it
+   * is opened transiently and starts closed — restoring it there would cover
+   * the writer's own text with notes the moment they opened the app, which is
+   * not what "leave the Margin open" was meant to ask for.
+   */
   paneOpen = $state(true);
   loading = $state(false);
   /** Which note is expanded for editing. */

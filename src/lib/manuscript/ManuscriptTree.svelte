@@ -1,7 +1,5 @@
 <script lang="ts">
-  import Button from '$lib/components/Button.svelte';
   import Icon from '$lib/components/Icon.svelte';
-  import IconButton from '$lib/components/IconButton.svelte';
   import Menu from '$lib/components/Menu.svelte';
   import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
@@ -9,11 +7,20 @@
   import type { ChapterOutline, PageSummary } from '$lib/types/manuscript';
   import type { MenuItem } from '$lib/types/ui';
 
+  /**
+   * The contents of the manuscript.
+   *
+   * Written to read as the front matter of a book rather than as a file tree.
+   * Chapters are section headings; Pages are entries beneath them. Word counts
+   * and per-Chapter actions stay out of sight until a row is hovered or is the
+   * one being written in — a column of numbers next to every line makes the
+   * navigation compete with the manuscript for attention, and on a 10-inch
+   * screen it is the manuscript that should win.
+   */
+
   interface Props {
-    /** Asked to rename something; the workspace owns the dialog. */
     onrename: (target: { kind: 'chapter' | 'page'; id: string; title: string }) => void;
     ondelete: (target: { kind: 'chapter' | 'page'; id: string; title: string }) => void;
-    /** Called after selecting a Page, so an overlay can close itself. */
     onnavigate?: () => void;
   }
 
@@ -86,246 +93,268 @@
     workspace.selectPage(id);
     onnavigate?.();
   }
+
+  /** The Chapter the open Page belongs to, which stays expanded and lit. */
+  const currentChapterId = $derived(
+    workspace.chapters.find((chapter) =>
+      chapter.pages.some((page) => page.id === workspace.activePageId)
+    )?.id ?? null
+  );
 </script>
 
-<nav class="tree" aria-label="Manuscript">
-  <div class="scroll" data-scroll>
-    {#if workspace.isEmpty}
-      <p class="blank">This Volume has no Chapters yet.</p>
-    {/if}
+<nav class="contents" aria-label="Manuscript" data-scroll>
+  {#if workspace.isEmpty}
+    <p class="blank">Nothing here yet.</p>
+  {/if}
 
-    <ul class="chapters">
-      {#each workspace.chapters as chapter (chapter.id)}
-        {@const collapsed = workspace.isCollapsed(chapter.id)}
-        <li class="chapter">
-          <div class="row chapter-row">
-            <!-- Collapsing is its own control rather than a click on the title:
-                 on a tablet, one target that both selects and folds is a
-                 target that does the wrong thing half the time. -->
-            <button
-              type="button"
-              class="twist"
-              aria-expanded={!collapsed}
-              aria-label="{collapsed ? 'Expand' : 'Collapse'} {chapter.title}"
-              onclick={() => workspace.toggleChapter(chapter.id)}
-            >
-              <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} size={16} />
-            </button>
+  <ol class="chapters">
+    {#each workspace.chapters as chapter, index (chapter.id)}
+      {@const collapsed = workspace.isCollapsed(chapter.id)}
+      {@const current = currentChapterId === chapter.id}
+      <li class="chapter" class:current>
+        <div class="chapter-row">
+          <button
+            type="button"
+            class="chapter-face"
+            aria-expanded={!collapsed}
+            onclick={() => workspace.toggleChapter(chapter.id)}
+          >
+            <span class="twist" aria-hidden="true">
+              <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} size={13} />
+            </span>
+            <span class="chapter-title">{chapter.title}</span>
+          </button>
 
-            <span class="chapter-title truncate">{chapter.title}</span>
-
-            <span class="tally tabular" aria-hidden="true">{chapter.pages.length}</span>
-
-            <div class="row-menu">
-              <Menu items={chapterActions(chapter)} label="{chapter.title} actions" size="sm" />
-            </div>
+          <div class="chapter-menu">
+            <Menu items={chapterActions(chapter)} label="{chapter.title} actions" size="sm" />
           </div>
+        </div>
 
-          {#if !collapsed}
-            <ul class="pages">
-              {#each chapter.pages as page (page.id)}
-                <li>
-                  <div class="row page-row" class:active={workspace.activePageId === page.id}>
-                    <button type="button" class="page-open" onclick={() => selectPage(page.id)}>
-                      {#if bookmarks.isMarked(page.id)}
-                        <span class="marked" title="Bookmarked">
-                          <Icon name="bookmark" size={12} />
-                        </span>
-                      {/if}
-                      <span class="page-title truncate">{page.title}</span>
-                      {#if page.wordCount > 0}
-                        <span class="tally tabular">{count(page.wordCount)}</span>
-                      {/if}
-                    </button>
+        {#if !collapsed}
+          <ul class="pages">
+            {#each chapter.pages as page (page.id)}
+              {@const active = workspace.activePageId === page.id}
+              <li class="page" class:active>
+                <button type="button" class="page-face" onclick={() => selectPage(page.id)}>
+                  <span class="page-title">{page.title}</span>
+                  {#if bookmarks.isMarked(page.id)}
+                    <span class="bookmarked" title="Bookmarked" aria-label="Bookmarked">
+                      <Icon name="bookmark" size={11} />
+                    </span>
+                  {/if}
+                  {#if page.wordCount > 0}
+                    <span class="words tabular">{count(page.wordCount)}</span>
+                  {/if}
+                </button>
 
-                    <div class="row-menu">
-                      <Menu items={pageActions(page)} label="{page.title} actions" size="sm" />
-                    </div>
-                  </div>
-                </li>
-              {/each}
+                <div class="page-menu">
+                  <Menu items={pageActions(page)} label="{page.title} actions" size="sm" />
+                </div>
+              </li>
+            {/each}
 
+            {#if chapter.pages.length === 0 || current}
               <li>
                 <button
                   type="button"
-                  class="row add"
+                  class="quiet-add"
                   onclick={() => void workspace.createPage(chapter.id)}
                 >
-                  <Icon name="plus" size={15} />
-                  <span>New Page</span>
+                  New Page
                 </button>
               </li>
-            </ul>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  </div>
+            {/if}
+          </ul>
+        {/if}
+      </li>
+      {#if index < workspace.chapters.length - 1}
+        <li class="gap" aria-hidden="true"></li>
+      {/if}
+    {/each}
+  </ol>
 
-  <footer class="foot">
-    <Button
-      variant="secondary"
-      size="sm"
-      icon="plus"
-      block
-      onclick={() => void workspace.createChapter()}
-    >
-      New Chapter
-    </Button>
-  </footer>
+  <!-- A line of text at the end of the contents, not a button bolted to the
+       bottom of the pane. The old fixed bar read as a web-app call to action. -->
+  <button type="button" class="quiet-add end" onclick={() => void workspace.createChapter()}>
+    New Chapter
+  </button>
 </nav>
 
 <style>
-  .tree {
-    display: flex;
-    flex-direction: column;
+  .contents {
     height: 100%;
     min-height: 0;
-  }
-
-  .scroll {
-    flex: 1;
-    min-height: 0;
-    padding: var(--space-2) var(--space-2) var(--space-4);
+    overflow-y: auto;
+    padding: var(--space-4) var(--space-1) var(--space-7) var(--space-2);
   }
 
   .blank {
-    padding: var(--space-4) var(--space-3);
+    padding: var(--space-3);
     font-size: var(--text-sm);
     color: var(--text-tertiary);
-    line-height: var(--leading-snug);
   }
 
-  .chapter + .chapter {
-    margin-top: var(--space-1);
+  .gap {
+    height: var(--space-4);
   }
 
-  /* Every row clears the touch minimum. The tree is the control a tablet user
-     touches most, and a dense desktop tree is unusable with a finger. */
-  .row {
-    display: flex;
-    align-items: center;
-    min-height: var(--touch-min);
-    border-radius: var(--radius-md);
-    padding-right: 2px;
-  }
+  /* --- Chapters ---------------------------------------------------------- */
 
   .chapter-row {
-    padding-left: 2px;
-    color: var(--text-primary);
+    position: relative;
+    display: flex;
+    align-items: center;
   }
 
-  .chapter-row:hover,
-  .page-row:hover {
-    background: var(--surface-hover);
+  .chapter-face {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: 1;
+    min-width: 0;
+    min-height: var(--touch-min);
+    padding: 0 var(--space-2) 0 0;
+    border-radius: var(--radius-sm);
+    text-align: left;
   }
 
   .twist {
     display: grid;
     place-items: center;
-    width: 30px;
-    height: var(--touch-min);
+    width: 18px;
     flex: none;
     color: var(--text-tertiary);
-    border-radius: var(--radius-sm);
   }
 
-  .twist:hover {
+  /* A section heading, in the manuscript's own face, rather than a tree node. */
+  .chapter-title {
+    font-family: var(--font-serif);
+    font-size: var(--text-md);
+    line-height: var(--leading-snug);
+    color: var(--text-secondary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chapter.current .chapter-title {
     color: var(--text-primary);
   }
 
-  .chapter-title {
-    flex: 1;
-    font-size: var(--text-md);
-    font-weight: var(--weight-medium);
-    padding: var(--space-1) var(--space-1);
+  .chapter-face:hover .chapter-title {
+    color: var(--text-primary);
   }
 
-  .tally {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    padding: 0 var(--space-2);
-    flex: none;
+  .chapter-menu,
+  .page-menu {
+    position: absolute;
+    right: 0;
+    opacity: 0;
+    transition: opacity var(--motion-fast) var(--ease-out);
   }
+
+  .page-menu {
+    top: 0;
+  }
+
+  /* Kept out of the way until wanted, but reachable: the row menu appears on
+     hover, on keyboard focus, and on the active Page — which is how a tablet,
+     with no hover at all, still gets to it. */
+  .chapter-row:hover .chapter-menu,
+  .chapter-menu:focus-within,
+  .page:hover .page-menu,
+  .page-menu:focus-within,
+  .page.active .page-menu {
+    opacity: 1;
+  }
+
+  /* --- Pages ------------------------------------------------------------- */
 
   .pages {
-    /* A hairline rule marking the chapter's extent, in place of indent guides
-       that would be invisible at this contrast. */
-    margin: var(--space-1) 0 var(--space-2) 15px;
+    margin-left: 18px;
     padding-left: var(--space-3);
     border-left: var(--border-width) solid var(--border-subtle);
   }
 
-  .page-row {
+  .page {
+    position: relative;
+  }
+
+  .page-face {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 34px;
+    padding: var(--space-1) var(--space-5) var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    text-align: left;
+    color: var(--text-tertiary);
+  }
+
+  .page-face:hover {
+    background: var(--surface-hover);
     color: var(--text-secondary);
   }
 
-  .page-row.active {
+  .page.active .page-face {
     background: var(--surface-selected);
     color: var(--text-primary);
   }
 
-  .page-row.active:hover {
-    background: var(--surface-selected);
-  }
-
-  .page-open {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
+  .page-title {
     flex: 1;
     min-width: 0;
-    min-height: var(--touch-min);
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-md);
+    font-size: var(--text-md);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .marked {
+  .bookmarked {
     flex: none;
     display: inline-flex;
     color: var(--accent);
   }
 
-  .page-title {
-    flex: 1;
-    text-align: left;
-    font-size: var(--text-md);
-  }
-
-  .active .page-title {
-    font-weight: var(--weight-medium);
-  }
-
-  .add {
-    width: 100%;
-    gap: var(--space-2);
-    padding-left: var(--space-2);
-    color: var(--text-tertiary);
-    font-size: var(--text-sm);
-  }
-
-  .add:hover {
-    background: var(--surface-hover);
-    color: var(--text-secondary);
-  }
-
-  /* The row menu is always present, never hover-revealed: a control that only
-     exists under a mouse pointer does not exist on a tablet. It is simply
-     quiet until it is wanted. */
-  .row-menu {
+  /* Word counts are metadata, not navigation. They appear when a row is
+     hovered or open, and are otherwise absent. */
+  .words {
     flex: none;
-    opacity: 0.55;
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+    opacity: 0;
     transition: opacity var(--motion-fast) var(--ease-out);
   }
 
-  .row:hover .row-menu,
-  .row-menu:focus-within {
+  .page-face:hover .words,
+  .page.active .words {
     opacity: 1;
   }
 
-  .foot {
-    flex: none;
-    padding: var(--space-2);
-    border-top: var(--border-width) solid var(--border-subtle);
+  /* --- Adding ------------------------------------------------------------ */
+
+  /* Italic, so it reads as an instruction rather than as one more entry in the
+     list it sits at the end of. */
+  .quiet-add {
+    display: block;
+    width: 100%;
+    min-height: 32px;
+    padding: 0 var(--space-2);
+    text-align: left;
+    font-size: var(--text-sm);
+    font-style: italic;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-sm);
+  }
+
+  .quiet-add:hover {
+    color: var(--accent);
+  }
+
+  .end {
+    margin-top: var(--space-5);
+    padding-left: 18px;
   }
 </style>
