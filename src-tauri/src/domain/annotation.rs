@@ -45,6 +45,8 @@ pub enum AnnotationKind {
     Reference,
     AiReview,
     AiSuggestion,
+    /// Handwritten margin ink. Its vector content lives in `domain::ink`.
+    Ink,
 }
 
 impl AnnotationKind {
@@ -57,6 +59,7 @@ impl AnnotationKind {
             AnnotationKind::Reference => "reference",
             AnnotationKind::AiReview => "ai-review",
             AnnotationKind::AiSuggestion => "ai-suggestion",
+            AnnotationKind::Ink => "ink",
         }
     }
 
@@ -69,6 +72,7 @@ impl AnnotationKind {
             "reference" => AnnotationKind::Reference,
             "ai-review" => AnnotationKind::AiReview,
             "ai-suggestion" => AnnotationKind::AiSuggestion,
+            "ink" => AnnotationKind::Ink,
             _ => return None,
         })
     }
@@ -693,6 +697,7 @@ mod tests {
             AnnotationKind::Reference,
             AnnotationKind::AiReview,
             AnnotationKind::AiSuggestion,
+            AnnotationKind::Ink,
         ] {
             assert_eq!(AnnotationKind::parse(kind.as_str()), Some(kind));
         }

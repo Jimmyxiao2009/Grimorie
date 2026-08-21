@@ -10,6 +10,7 @@ pub mod annotations;
 pub mod bookmarks;
 pub mod chapters;
 pub mod drafts;
+pub mod ink;
 pub mod pages;
 pub mod revisions;
 pub mod settings;

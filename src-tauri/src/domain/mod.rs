@@ -8,14 +8,16 @@
 
 pub mod annotation;
 pub mod ids;
+pub mod ink;
 pub mod manuscript;
 pub mod settings;
 pub mod text;
 
 pub use ids::{
-    AnnotationId, AttachmentId, BookmarkId, ChapterId, PageId, RevisionId, SessionId, TagId,
-    VolumeId,
+    AnnotationId, AttachmentId, BookmarkId, ChapterId, PageId, RevisionId, SessionId, StrokeId,
+    TagId, VolumeId,
 };
+pub use ink::{InkPoint, InkStroke, InkTool};
 pub use manuscript::{
     Chapter, ChapterOutline, CoverTint, Outline, Page, PageSummary, Timestamp, Volume,
     VolumeSummary, empty_document, now,

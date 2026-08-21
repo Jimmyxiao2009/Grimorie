@@ -86,6 +86,7 @@ typed_id!(VolumeId, "Volume");
 typed_id!(ChapterId, "Chapter");
 typed_id!(PageId, "Page");
 typed_id!(AnnotationId, "annotation");
+typed_id!(StrokeId, "ink stroke");
 typed_id!(BookmarkId, "bookmark");
 typed_id!(TagId, "tag");
 typed_id!(RevisionId, "revision");

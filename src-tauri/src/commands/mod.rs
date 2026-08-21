@@ -12,6 +12,7 @@ pub mod ai;
 pub mod annotations;
 pub mod bookmarks;
 pub mod history;
+pub mod ink;
 pub mod manuscript;
 pub mod search;
 pub mod settings;
