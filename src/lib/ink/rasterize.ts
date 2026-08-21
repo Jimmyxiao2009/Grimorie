@@ -25,6 +25,17 @@ const BACKGROUND = '#ffffff';
 const INK = '#111111';
 
 /**
+ * The normalised highlighter colour: a pale grey wash.
+ *
+ * A highlighter is wide — ten pixels against the pen's two — so drawing it in
+ * the pen's ink would put a solid bar straight through the handwriting it was
+ * meant to mark. Rendering it as a light wash, and drawing it *first*, matches
+ * what the writer sees on screen and leaves the pen strokes as the only dark
+ * marks in the image.
+ */
+const HIGHLIGHT = '#d8d8d8';
+
+/**
  * Floor on the raster's longest side.
  *
  * This is the parameter recognition quality turns on, and it exists because
@@ -140,13 +151,23 @@ export async function renderInkPngAsync(
   ctx.translate(PADDING, PADDING);
   ctx.scale(scale, scale);
   ctx.translate(-minX, -minY);
-  ctx.fillStyle = INK;
-  ctx.strokeStyle = INK;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  for (const stroke of strokes) {
+  // Highlighters first, pens over them — the same order the SVG surface paints
+  // in. Drawing in raw array order would let a highlight applied after a word
+  // cover the word in the image the model reads, even though on screen it sits
+  // behind it.
+  const ordered = [
+    ...strokes.filter((s) => s.tool === 'highlighter'),
+    ...strokes.filter((s) => s.tool !== 'highlighter')
+  ];
+
+  for (const stroke of ordered) {
     if (stroke.points.length === 0) continue;
+    const color = stroke.tool === 'highlighter' ? HIGHLIGHT : INK;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
     ctx.lineWidth = stroke.width;
     if (stroke.points.length === 1) {
       const p = denormalizePoint(stroke.points[0]!, surfaceWidth);

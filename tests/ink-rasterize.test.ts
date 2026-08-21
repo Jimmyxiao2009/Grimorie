@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { recognitionScale, strokeBounds } from '$lib/ink/rasterize';
-import type { InkStroke } from '$lib/types/ink';
+import { recognitionScale, renderInkPngAsync, strokeBounds } from '$lib/ink/rasterize';
+import type { InkStroke, InkTool } from '$lib/types/ink';
 
 function stroke(points: { x: number; y: number }[], width = 2): InkStroke {
   return {
@@ -21,6 +21,56 @@ function stroke(points: { x: number; y: number }[], width = 2): InkStroke {
     points,
     createdAt: '2026-01-01T00:00:00Z'
   };
+}
+
+function toolStroke(id: string, tool: InkTool, width: number): InkStroke {
+  return {
+    id,
+    tool,
+    color: tool === 'highlighter' ? 'ink-highlighter' : 'ink-primary',
+    width,
+    points: [
+      { x: 0.1, y: 10 },
+      { x: 0.6, y: 12 }
+    ],
+    createdAt: '2026-01-01T00:00:00Z'
+  };
+}
+
+/**
+ * A canvas that records what was drawn, so the recognition image's *content*
+ * can be asserted without a real 2D backend. jsdom has no PNG encoder, which is
+ * why the rasterizer takes an injectable factory in the first place.
+ */
+function recordingCanvas() {
+  const painted: { color: string; lineWidth: number }[] = [];
+  const ctx = {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+    lineCap: '',
+    lineJoin: '',
+    fillRect: () => {},
+    translate: () => {},
+    scale: () => {},
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    arc: () => {},
+    fill() {
+      painted.push({ color: String(ctx.fillStyle), lineWidth: ctx.lineWidth });
+    },
+    stroke() {
+      painted.push({ color: String(ctx.strokeStyle), lineWidth: ctx.lineWidth });
+    }
+  };
+  const factory = (width: number, height: number) => ({
+    width,
+    height,
+    getContext: () => ctx as unknown as CanvasRenderingContext2D,
+    toBlob: (cb: (blob: Blob | null) => void) => cb(new Blob([new Uint8Array([1])]))
+  });
+  return { painted, factory };
 }
 
 describe('strokeBounds', () => {
@@ -102,5 +152,54 @@ describe('recognitionScale', () => {
 
   it('is defensive about a degenerate size', () => {
     expect(recognitionScale(0, 0)).toBe(1);
+  });
+});
+
+describe('the recognition image', () => {
+  it('draws a highlighter as a pale wash, not in the pen ink', async () => {
+    // A highlighter is five times the pen's width. Drawn in the pen's ink it
+    // is a solid bar through the handwriting it was meant to mark, and the
+    // model reads a redaction.
+    const { painted, factory } = recordingCanvas();
+    await renderInkPngAsync(
+      [toolStroke('pen-1', 'pen', 2), toolStroke('hl-1', 'highlighter', 10)],
+      300,
+      factory
+    );
+
+    const highlighter = painted.find((p) => p.lineWidth === 10)!;
+    const pen = painted.find((p) => p.lineWidth === 2)!;
+    expect(highlighter.color).not.toBe(pen.color);
+    // The pen is the dark mark; the highlighter is lighter than it.
+    expect(pen.color).toBe('#111111');
+    expect(highlighter.color).not.toBe('#111111');
+  });
+
+  it('draws highlighters behind pen strokes, whatever order they were drawn in', async () => {
+    // The SVG surface layers highlighters behind pens. If the raster used raw
+    // array order, a highlight applied *after* a word would cover it here but
+    // not on screen — the model would read something the writer never saw.
+    const { painted, factory } = recordingCanvas();
+    await renderInkPngAsync(
+      [toolStroke('pen-1', 'pen', 2), toolStroke('hl-1', 'highlighter', 10)],
+      300,
+      factory
+    );
+
+    expect(painted.map((p) => p.lineWidth)).toEqual([10, 2]);
+  });
+
+  it('reports the dimensions it rendered at', async () => {
+    const { factory } = recordingCanvas();
+    const result = await renderInkPngAsync([toolStroke('pen-1', 'pen', 2)], 300, factory);
+    expect(result).not.toBeNull();
+    // A 150px-wide mark in a 300px surface is magnified toward the floor.
+    expect(result!.width).toBeGreaterThan(1000);
+    expect(result!.png.length).toBeGreaterThan(0);
+  });
+
+  it('returns null for a note with nothing in it', async () => {
+    const { factory } = recordingCanvas();
+    expect(await renderInkPngAsync([], 300, factory)).toBeNull();
   });
 });
