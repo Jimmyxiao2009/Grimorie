@@ -11,6 +11,7 @@
 
   import ManuscriptTree from '$lib/manuscript/ManuscriptTree.svelte';
   import Margin from '$lib/annotations/Margin.svelte';
+  import InkToolbar from '$lib/ink/InkToolbar.svelte';
   import RevisionHistory from '$lib/revisions/RevisionHistory.svelte';
   import SearchDialog from '$lib/search/SearchDialog.svelte';
   import BookmarksDialog from '$lib/bookmarks/BookmarksDialog.svelte';
@@ -27,6 +28,7 @@
   import { ai } from '$lib/stores/ai.svelte';
   import { bookmarks } from '$lib/stores/bookmarks.svelte';
   import { margin } from '$lib/stores/margin.svelte';
+  import { ink } from '$lib/stores/ink.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
   import { count } from '$lib/utils/format';
@@ -94,6 +96,7 @@
       workspace.close();
       activePage.clear();
       margin.clear();
+      ink.clear();
       bookmarks.clear();
       stopAi();
       ai.clear();
@@ -105,18 +108,23 @@
     const id = workspace.activePageId;
     if (!id) {
       activePage.clear();
+      ink.clear();
       return;
     }
     if (activePage.page?.id === id) return;
     void activePage.load(id);
     void margin.load(id);
+    void ink.load(id);
     void ai.loadSuggestions(id);
   });
 
   // Saving re-anchors annotations in the same transaction, so the Margin is
   // re-read once the save lands rather than left showing pre-save offsets.
   $effect(() => {
-    if (autosave.state === 'saved' && autosave.lastSavedAt !== null) void margin.refresh();
+    if (autosave.state === 'saved' && autosave.lastSavedAt !== null) {
+      void margin.refresh();
+      void ink.refresh();
+    }
   });
 
   $effect(() => {
@@ -214,6 +222,7 @@
     if (!id) return;
     await activePage.load(id);
     await margin.refresh();
+    await ink.refresh();
     await ai.loadSuggestions(id);
   }
 
@@ -296,6 +305,12 @@
     const mod = event.ctrlKey || event.metaKey;
     if (!mod) {
       if (event.key === 'Escape') {
+        if (ink.penMode) {
+          // Escape leaves pen mode, the way it leaves other modal states.
+          event.preventDefault();
+          ink.togglePenMode();
+          return;
+        }
         if (marginOverlayOpen) {
           event.preventDefault();
           marginOverlayOpen = false;
@@ -304,6 +319,16 @@
           navOpen = false;
         }
       }
+      return;
+    }
+
+    // Ink undo/redo is a separate history from the editor's, so that Ctrl+Z in
+    // pen mode removes a stroke rather than deleting prose. Only pen mode
+    // claims the shortcut; otherwise the editor's text undo is untouched.
+    if (ink.penMode && (event.key === 'z' || event.key === 'Z' || event.key === 'y')) {
+      event.preventDefault();
+      if (event.shiftKey || event.key === 'y') void ink.redo();
+      else void ink.undo();
       return;
     }
 
@@ -393,6 +418,9 @@
         disabled={!activePage.page}
         onclick={openHistory}
       />
+      {#if activePage.page && marginShown}
+        <InkToolbar />
+      {/if}
       <span class="margin-toggle">
         <IconButton
           name="panelRight"

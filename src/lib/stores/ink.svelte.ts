@@ -25,6 +25,7 @@
  */
 
 import * as service from '$lib/ink/service';
+import { hitTestStroke } from '$lib/ink/geometry';
 import type { Annotation } from '$lib/types/annotation';
 import type { InkNote, InkStroke, InkTool } from '$lib/types/ink';
 import { notices } from '$lib/stores/notices.svelte';
@@ -234,7 +235,6 @@ class InkStore {
    * optimistically and persists the deletion; on failure the stroke is restored.
    */
   async eraseAt(point: { x: number; y: number }, surfaceWidth: number): Promise<void> {
-    const { hitTestStroke } = await import('$lib/ink/geometry');
     const candidates = this.allStrokes;
     if (candidates.length === 0) return;
 

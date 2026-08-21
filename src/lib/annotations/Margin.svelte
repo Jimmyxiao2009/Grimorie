@@ -1,5 +1,6 @@
 <script lang="ts">
   import AnnotationCard from './AnnotationCard.svelte';
+  import InkNote from '$lib/ink/InkNote.svelte';
   import AskGrimoire from './AskGrimoire.svelte';
   import TagRow from './TagRow.svelte';
   import Button from '$lib/components/Button.svelte';
@@ -8,6 +9,7 @@
   import TextField from '$lib/components/TextField.svelte';
   import { ai } from '$lib/stores/ai.svelte';
   import { margin } from '$lib/stores/margin.svelte';
+  import { ink } from '$lib/stores/ink.svelte';
   import {
     AUTHORABLE_KINDS,
     KIND_GLYPHS,
@@ -61,8 +63,19 @@
 
   const hasSelection = $derived(selection !== null && selection.to > selection.from);
 
-  const loose = $derived(margin.visible.filter((note) => anchorOf(note) === null));
-  const anchored = $derived(margin.visible.filter((note) => anchorOf(note) !== null));
+  // Ink notes live in the ink store, not the margin store — they are
+  // annotations, but their strokes are a separate payload. Merging them here
+  // lets the existing layout treat every margin note uniformly, ink or text.
+  const inkNotes = $derived(ink.noteList.map((note) => note.annotation));
+
+  const loose = $derived([
+    ...margin.visible.filter((note) => anchorOf(note) === null),
+    ...inkNotes.filter((note) => anchorOf(note) === null)
+  ]);
+  const anchored = $derived([
+    ...margin.visible.filter((note) => anchorOf(note) !== null),
+    ...inkNotes.filter((note) => anchorOf(note) !== null)
+  ]);
 
   /**
    * Where the Margin is an overlay rather than a pane, it has no manuscript
@@ -182,6 +195,10 @@
     const target = deleteTarget;
     if (!target) return;
     deleting = false;
+    if (target.kind === 'ink') {
+      await ink.deleteNote(target.id);
+      return;
+    }
     await margin.remove(target.id);
   }
 
@@ -221,24 +238,37 @@
     {@const top = layout.tops.get(note.id)}
     {#if top !== undefined}
       <div class="placed" style:top={stacked ? undefined : `${top}px`} use:measure={note.id}>
-        <AnnotationCard
-          annotation={note}
-          focused={margin.focusedId === note.id}
-          onfocus={(id) => (margin.focusedId = margin.focusedId === id ? null : id)}
-          onedit={beginEdit}
-          onresolve={toggleResolved}
-          ondelete={(target) => {
-            deleteTarget = target;
-            deleting = true;
-          }}
-          {onreveal}
-          onapplied={() => onapplied?.()}
-        />
+        {#if note.kind === 'ink'}
+          <InkNote
+            annotation={note}
+            focused={margin.focusedId === note.id}
+            onfocus={(id) => (margin.focusedId = margin.focusedId === id ? null : id)}
+            ondelete={(target) => {
+              deleteTarget = target;
+              deleting = true;
+            }}
+            {onreveal}
+          />
+        {:else}
+          <AnnotationCard
+            annotation={note}
+            focused={margin.focusedId === note.id}
+            onfocus={(id) => (margin.focusedId = margin.focusedId === id ? null : id)}
+            onedit={beginEdit}
+            onresolve={toggleResolved}
+            ondelete={(target) => {
+              deleteTarget = target;
+              deleting = true;
+            }}
+            {onreveal}
+            onapplied={() => onapplied?.()}
+          />
+        {/if}
       </div>
     {/if}
   {/each}
 
-  {#if margin.visible.length === 0 && !ai.isStreaming}
+  {#if margin.visible.length === 0 && inkNotes.length === 0 && !ai.isStreaming}
     <p class="blank">
       {hasSelection
         ? 'Leave a note about the selected text.'
@@ -299,10 +329,14 @@
 
 <Dialog
   bind:open={deleting}
-  title="Delete this note?"
+  title={deleteTarget?.kind === 'ink' ? 'Delete this ink note?' : 'Delete this note?'}
   description="The manuscript itself is not affected."
 >
-  <p class="quoted">{deleteTarget?.body ?? ''}</p>
+  {#if deleteTarget?.kind === 'ink'}
+    <p class="plain">The handwriting in this note will be removed.</p>
+  {:else}
+    <p class="quoted">{deleteTarget?.body ?? ''}</p>
+  {/if}
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (deleting = false)}>Cancel</Button>
     <Button variant="danger" onclick={confirmDelete}>Delete</Button>
@@ -407,6 +441,11 @@
     max-height: 8rem;
     overflow-y: auto;
     white-space: pre-wrap;
+  }
+
+  .plain {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
   }
 
   fieldset {

@@ -101,14 +101,15 @@
     svg!.setPointerCapture(event.pointerId);
     event.preventDefault();
 
-    const point = normalizePoint(surfacePoint(event), surfaceWidth, 0);
+    const raw = surfacePoint(event);
+    const point = normalizePoint(raw, surfaceWidth, 0);
 
     if (ink.tool === 'eraser') {
-      // The eraser works on a down-tap: erase the nearest stroke and end.
-      void ink.eraseAt(
-        { x: point.x * surfaceWidth, y: point.y },
-        surfaceWidth
-      );
+      // The eraser works on a down-tap: erase the nearest stroke and end. The
+      // raw surface-pixel point is passed because hitTestStroke denormalises
+      // stored points to compare against it — passing a normalised x here would
+      // be denormalised twice.
+      void ink.eraseAt(raw, surfaceWidth);
       drawingPointerId = null;
       return;
     }

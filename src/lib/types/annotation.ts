@@ -7,7 +7,8 @@ export type AnnotationKind =
   | 'warning'
   | 'reference'
   | 'ai-review'
-  | 'ai-suggestion';
+  | 'ai-suggestion'
+  | 'ink';
 
 export type AnnotationStatus = 'active' | 'resolved' | 'stale';
 
@@ -65,7 +66,8 @@ export const KIND_LABELS: Record<AnnotationKind, string> = {
   warning: 'Warning',
   reference: 'Reference',
   'ai-review': 'AI review',
-  'ai-suggestion': 'AI suggestion'
+  'ai-suggestion': 'AI suggestion',
+  ink: 'Ink note'
 };
 
 /**
@@ -86,5 +88,6 @@ export const KIND_GLYPHS: Record<AnnotationKind, string> = {
   warning: '!',
   reference: '§',
   'ai-review': '—',
-  'ai-suggestion': '↗'
+  'ai-suggestion': '↗',
+  ink: '✎'
 };
