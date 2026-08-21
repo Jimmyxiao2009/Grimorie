@@ -220,16 +220,10 @@ class InkStore {
     try {
       await service.addInkStrokes(annotationId, [stroke]);
       this.saveError = false;
-      // The ink changed: schedule automatic recognition against the *whole*
-      // note, not just the stroke that was added. Two reasons, and both are
-      // fatal if this passes a single stroke: the recognizer would be sent a
-      // raster of one stroke rather than the handwriting, and the snapshot's
-      // content hash would cover one stroke while the queue's stale check
-      // re-reads all of them — so every result on a multi-stroke note would be
-      // discarded as stale. The backend debounces, so a burst of strokes still
-      // collapses to one job. Recognition never blocks the save — the stroke is
-      // already persisted.
-      void inkRecognition.scheduleAutomatic(annotationId, this.strokesFor(annotationId));
+      // The ink changed. The backend debounces, so a burst of strokes still
+      // collapses to one job, and recognition never blocks the save — the
+      // stroke is already persisted.
+      this.inkChanged(annotationId);
     } catch (error) {
       // Keep the stroke visible; flag the error and offer a retry.
       this.saveError = true;
@@ -275,9 +269,9 @@ class InkStore {
     try {
       await service.deleteInkStroke(stroke.id);
       this.saveError = false;
-      // Erasing changed the ink: schedule recognition against the remaining
-      // strokes, so a stale transcript is refreshed.
-      void inkRecognition.scheduleAutomatic(annotationId, this.strokesFor(annotationId));
+      // Erasing changed the ink, so a stale transcript is refreshed against
+      // the strokes that remain.
+      this.inkChanged(annotationId);
     } catch (error) {
       // Restore the stroke so the writer does not see it vanish.
       this.addStrokeLocal(annotationId, stroke);
@@ -317,6 +311,7 @@ class InkStore {
       } catch (error) {
         this.addStrokeLocal(entry.annotationId, entry.stroke);
         notices.failure(error);
+        return;
       }
     } else {
       // Undo an erase by re-adding the stroke.
@@ -326,8 +321,11 @@ class InkStore {
       } catch (error) {
         this.removeStrokeLocal(entry.annotationId, entry.stroke.id);
         notices.failure(error);
+        return;
       }
     }
+
+    this.inkChanged(entry.annotationId);
   }
 
   /** Redoes the last undone ink action. */
@@ -343,6 +341,7 @@ class InkStore {
       } catch (error) {
         this.removeStrokeLocal(entry.annotationId, entry.stroke.id);
         notices.failure(error);
+        return;
       }
     } else {
       this.removeStrokeLocal(entry.annotationId, entry.stroke.id);
@@ -351,8 +350,27 @@ class InkStore {
       } catch (error) {
         this.addStrokeLocal(entry.annotationId, entry.stroke);
         notices.failure(error);
+        return;
       }
     }
+
+    this.inkChanged(entry.annotationId);
+  }
+
+  /**
+   * Tells recognition that a note's ink has moved on.
+   *
+   * Every path that changes strokes goes through here — drawing, erasing,
+   * undo, redo — because a transcript that no longer matches the handwriting
+   * is worse than no transcript: it is confidently wrong, and it is what
+   * search and the AI context will use.
+   *
+   * Scheduling liberally is safe: the backend skips a note whose ink already
+   * matches its stored transcript, so an undo that returns the ink to an
+   * already-recognised state costs nothing.
+   */
+  private inkChanged(annotationId: string): void {
+    void inkRecognition.scheduleAutomatic(annotationId, this.strokesFor(annotationId));
   }
 
   /** The strokes for one ink note, in drawing order. */

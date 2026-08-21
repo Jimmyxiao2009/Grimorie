@@ -191,6 +191,48 @@ describe('ink store — what recognition is given', () => {
     expect(lastCall?.[1].length).toBe(1);
   });
 
+  it('re-recognises after undo, so a transcript never outlives its ink', async () => {
+    // A transcript that no longer matches the handwriting is worse than none:
+    // it is confidently wrong, and it is what search and the AI context use.
+    addInkStrokes.mockResolvedValue(undefined);
+    deleteInkStroke.mockResolvedValue(undefined);
+
+    await ink.commitStroke(stroke('s1'));
+    await ink.commitStroke(stroke('s2'));
+    scheduleAutomatic.mockClear();
+
+    await ink.undo();
+
+    expect(scheduleAutomatic).toHaveBeenCalledTimes(1);
+    expect(scheduleAutomatic.mock.calls.at(-1)?.[1].map((s) => s.id)).toEqual(['s1']);
+  });
+
+  it('re-recognises after redo', async () => {
+    addInkStrokes.mockResolvedValue(undefined);
+    deleteInkStroke.mockResolvedValue(undefined);
+
+    await ink.commitStroke(stroke('s1'));
+    await ink.undo();
+    scheduleAutomatic.mockClear();
+
+    await ink.redo();
+
+    expect(scheduleAutomatic.mock.calls.at(-1)?.[1].map((s) => s.id)).toEqual(['s1']);
+  });
+
+  it('does not re-recognise when an undo failed to persist', async () => {
+    addInkStrokes.mockResolvedValue(undefined);
+    await ink.commitStroke(stroke('s1'));
+    scheduleAutomatic.mockClear();
+
+    deleteInkStroke.mockRejectedValueOnce(new Error('disk full'));
+    await ink.undo();
+
+    // The stroke was restored, so the ink did not actually change.
+    expect(ink.strokesFor('note-1').length).toBe(1);
+    expect(scheduleAutomatic).not.toHaveBeenCalled();
+  });
+
   it('does not schedule recognition when the stroke failed to persist', async () => {
     // Recognising ink the backend never stored would compare a snapshot hash
     // against strokes that are not there.
