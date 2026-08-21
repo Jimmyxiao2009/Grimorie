@@ -178,19 +178,21 @@
     return pathFromStroke(activeStroke, surfaceWidth);
   });
 
-  // Touch drawing is blocked at the handler level, but we also tell the browser
-  // not to synthesize touch gestures (scroll, double-tap zoom) from pen events
-  // when active, so a pen stroke does not pan the page. When inactive, the
-  // surface must not steal touch scrolling.
-  const touchAction = $derived(active ? 'none' : 'auto');
+  // Touch drawing is blocked at the handler level (pointerType is checked on
+  // every event), so touch never produces a stroke. The touch-action property
+  // only governs what the browser does with touch *gestures*: when active, a
+  // finger can still scroll the page vertically (pan-y) — the manuscript and
+  // the margin share one vertical scroll container — but panning is not
+  // mistaken for drawing. When inactive, the surface does not capture input at
+  // all, so touch behaves entirely normally.
+  const touchAction = $derived(active ? 'pan-y' : 'auto');
 </script>
 
 <svg
   bind:this={svg}
   class="ink-surface"
   class:active
-  aria-label="Handwriting surface"
-  role="img"
+  aria-hidden={active ? 'false' : 'true'}
   style:touch-action={touchAction}
   style:width="100%"
   style:height="100%"
