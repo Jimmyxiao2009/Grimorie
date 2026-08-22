@@ -250,7 +250,7 @@
   // the margin share one vertical scroll container — but panning is not
   // mistaken for drawing. When inactive, the surface does not capture input at
   // all, so touch behaves entirely normally.
-  const touchAction = $derived(active ? 'pan-y' : 'auto');
+  const touchAction = $derived(active ? 'none' : 'auto');
 </script>
 
 <svg
