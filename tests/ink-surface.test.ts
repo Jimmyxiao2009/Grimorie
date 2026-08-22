@@ -149,7 +149,7 @@ describe('ink surface — input discipline', () => {
     await vi.waitFor(() => expect(ink.strokesFor('note-1').length).toBe(1));
   });
 
-  it('ignores touch, so a resting palm leaves no mark', async () => {
+  it('draws with touch instead of handing the gesture to page scrolling', async () => {
     const { container } = render(InkSurface, { annotationId: 'note-1', active: true });
     const svg = surfaceOf(container);
 
@@ -161,7 +161,7 @@ describe('ink surface — input discipline', () => {
     );
     svg.dispatchEvent(pointerEvent('pointerup', { pointerId: 9, pointerType: 'touch' }));
 
-    expect(ink.strokesFor('note-1').length).toBe(0);
+    await vi.waitFor(() => expect(ink.strokesFor('note-1').length).toBe(1));
   });
 
   it('ignores a second pointer landing mid-stroke', async () => {

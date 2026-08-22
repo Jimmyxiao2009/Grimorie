@@ -5,12 +5,10 @@
    *
    * # Input discipline
    *
-   * Pen and mouse draw; touch never draws. A finger is for scrolling and
-   * tapping, and a palm resting on the screen while the pen writes must not
-   * leave stray marks. That is enforced by checking `pointerType` on every
-   * event and by ignoring every pointer that is not the one that started the
-   * stroke — so a second finger or a resting palm cannot hijack an active
-   * stroke.
+   * Pen, touch, and primary-button mouse all draw. Browser panning is disabled
+   * while the surface is active; moving the paper is an explicit Hand-tool
+   * action. One pointer owns each stroke, so a second pointer cannot hijack an
+   * active line.
    *
    * # Performance discipline
    *
@@ -111,8 +109,9 @@
 
   function onPointerDown(event: PointerEvent) {
     if (!active) return;
-    // Only pen and mouse draw. Touch is for scrolling and tapping.
-    if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+    // Pen, touch, and primary-button mouse all draw. Scrolling is an explicit
+    // Hand-tool interaction on the manuscript rather than a browser gesture.
+    if (event.pointerType !== 'pen' && event.pointerType !== 'mouse' && event.pointerType !== 'touch') return;
     // A mouse stroke only counts when the primary button is down.
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     // One stroke at a time: a second pointer that lands while one is active is
@@ -243,13 +242,10 @@
     return pathFromStroke(activeStroke, surfaceWidth);
   });
 
-  // Touch drawing is blocked at the handler level (pointerType is checked on
-  // every event), so touch never produces a stroke. The touch-action property
-  // only governs what the browser does with touch *gestures*: when active, a
-  // finger can still scroll the page vertically (pan-y) — the manuscript and
-  // the margin share one vertical scroll container — but panning is not
-  // mistaken for drawing. When inactive, the surface does not capture input at
-  // all, so touch behaves entirely normally.
+  // Active ink owns direct manipulation completely. `touch-action: none` keeps
+  // Windows/WebView scrolling or pinch gestures from cancelling a stroke; the
+  // dedicated Hand tool is the only path for moving the paper. When inactive,
+  // the surface stops capturing input and normal UI behavior resumes.
   const touchAction = $derived(active ? 'none' : 'auto');
 </script>
 
